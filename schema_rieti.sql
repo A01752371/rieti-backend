@@ -1,3 +1,9 @@
+-- schema_rieti.sql
+-- Estructura de la base de datos RIETI.
+--
+-- CUIDADO: la primera instrucción BORRA la base completa y la vuelve a crear.
+-- Solo correr este archivo para instalar desde cero. Si ya hay datos, no.
+
 DROP DATABASE IF EXISTS rieti;
 
 CREATE DATABASE rieti
@@ -16,6 +22,7 @@ CREATE TABLE rol (
 CREATE TABLE municipio (
     idMunicipio     INT          NOT NULL AUTO_INCREMENT,
     nombre          VARCHAR(100) NOT NULL,
+    siglas          VARCHAR(5)   NOT NULL,
     clave_inegi     VARCHAR(5)   NOT NULL,
     adherido_rieti  BOOLEAN      NOT NULL DEFAULT FALSE,
     contador        INT          NOT NULL DEFAULT 0,
@@ -231,18 +238,22 @@ CREATE TABLE notificacion (
         ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- =========================================================================
+-- CATÁLOGOS BASE DEL SISTEMA
+-- =========================================================================
+
 INSERT INTO rol (nombre) VALUES
     ('Administrador'),
     ('Alimentador');
 
-INSERT INTO municipio (nombre, clave_inegi, adherido_rieti) VALUES
-    ('Atizapan de Zaragoza', '15013', TRUE),
-    ('Tlalnepantla de Baz', '15104', TRUE),
-    ('Ecatepec de Morelos', '15033', TRUE),
-    ('Cuautitlan Izcalli', '15121', TRUE),
-    ('Tultitlan', '15109', TRUE),
-    ('Coacalco de Berriozabal', '15020', TRUE),
-    ('Toluca', '15106', FALSE);
+INSERT INTO municipio (nombre, siglas, clave_inegi, adherido_rieti) VALUES
+    ('Atizapan de Zaragoza',    'ATZ', '15013', TRUE),
+    ('Tlalnepantla de Baz',     'TLA', '15104', TRUE),
+    ('Ecatepec de Morelos',     'ECA', '15033', TRUE),
+    ('Cuautitlan Izcalli',      'CIZ', '15121', TRUE),
+    ('Tultitlan',               'TLT', '15109', TRUE),
+    ('Coacalco de Berriozabal', 'COA', '15020', TRUE),
+    ('Toluca',                  'TOL', '15106', FALSE);
 
 INSERT INTO catalogo_actividad (nombre) VALUES
     ('Venta de productos en via publica'),
@@ -252,6 +263,3 @@ INSERT INTO catalogo_actividad (nombre) VALUES
     ('Limpieza de parabrisas'),
     ('Actividades agricolas'),
     ('Otra');
-
-USE rieti;
-SHOW TABLES;
