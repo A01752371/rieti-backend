@@ -7,8 +7,9 @@ import express from 'express';
 import cors from 'cors';
 import mysql from 'mysql2/promise';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const app = express();
@@ -51,6 +52,12 @@ const pool = mysql.createPool({
 
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 const BUCKET_NAME = process.env.S3_BUCKET_NAME;
+
+// Costo de bcrypt. Más alto = más lento de romper, pero también de validar.
+const BCRYPT_ROUNDS = 10;
+
+// Longitud mínima de contraseña
+const MIN_PASSWORD = 8;
 
 // Estatus válidos del reporte. Deben coincidir con el catálogo del diseño.
 const ESTATUS = {
@@ -345,6 +352,59 @@ app.post('/api/v1/evidencias/confirmar', async (req, res) => {
   }
 });
 
+// Generar una URL firmada de LECTURA para ver una evidencia.
+// El bucket es privado, así que esta es la única forma de mostrar la imagen.
+// Requiere sesión: las fotos son parte del expediente, no contenido público.
+app.post('/api/v1/evidencias/url-lectura', verificarToken, async (req, res) => {
+  try {
+    const { key } = req.body;
+    const { idRol, idMunicipio } = req.usuario;
+
+    if (!key) {
+      return res.status(400).json({ error: 'Se requiere key' });
+    }
+
+    if (!BUCKET_NAME) {
+      return res.status(500).json({ error: 'Falta la variable de entorno S3_BUCKET_NAME' });
+    }
+
+    // La evidencia debe existir en la base, para no firmar rutas arbitrarias
+    const [rows] = await pool.query(
+      `SELECT e.idEvidencia, e.folio, e.fecha_purga, r.idMunicipio
+       FROM evidencia e
+       JOIN reporte r ON e.folio = r.folio
+       WHERE e.ruta_s3 = ?`,
+      [key]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'La evidencia no está registrada' });
+    }
+
+    const evidencia = rows[0];
+
+    // Un Alimentador solo ve evidencias de su propio municipio
+    if (idRol !== 1 && evidencia.idMunicipio !== idMunicipio) {
+      return res.status(403).json({ error: 'No tiene jurisdicción sobre esta evidencia' });
+    }
+
+    const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key });
+
+    // Cinco minutos: lo suficiente para desplegar la imagen, no para compartirla
+    const urlLectura = await getSignedUrl(s3Client, command, { expiresIn: 300 });
+
+    res.json({
+      urlLectura: urlLectura,
+      key: key,
+      folio: evidencia.folio,
+      expira_en_segundos: 300,
+      fecha_purga: evidencia.fecha_purga
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al generar URL de lectura', detalle: error.message });
+  }
+});
+
 // =========================================================================
 // 3. AUTENTICACIÓN
 // =========================================================================
@@ -372,9 +432,11 @@ app.post('/api/v1/auth/login', async (req, res) => {
 
     const usuario = rows[0];
 
-    // PENDIENTE: la comparación es en texto plano. Antes de liberar hay que
-    // guardar el password con bcrypt y usar bcrypt.compare aquí (RNF-31).
-    if (password !== usuario.password_hash) {
+    // La contraseña nunca se compara en claro: se vuelve a calcular el hash
+    // con el salt guardado y se comparan los hashes (RNF-31).
+    const coincide = await bcrypt.compare(password, usuario.password_hash);
+
+    if (!coincide) {
       return res.status(401).json({ error: 'Credenciales incorrectas' });
     }
 
@@ -416,8 +478,160 @@ app.get('/api/v1/auth/me', verificarToken, (req, res) => {
   res.json({ usuario: req.usuario });
 });
 
+// Cambio de contraseña propia. Cualquier usuario con sesión puede hacerlo,
+// pero debe comprobar que sabe la contraseña actual.
+app.post('/api/v1/auth/password', verificarToken, async (req, res) => {
+  try {
+    const { idUsuario } = req.usuario;
+    const { password_actual, password_nueva } = req.body;
+
+    if (!password_actual || !password_nueva) {
+      return res.status(400).json({ error: 'Se requiere password_actual y password_nueva' });
+    }
+
+    if (password_nueva.length < MIN_PASSWORD) {
+      return res.status(400).json({
+        error: 'La contraseña nueva debe tener al menos ' + MIN_PASSWORD + ' caracteres'
+      });
+    }
+
+    if (password_actual === password_nueva) {
+      return res.status(400).json({ error: 'La contraseña nueva debe ser distinta de la actual' });
+    }
+
+    const [rows] = await pool.query(
+      'SELECT password_hash FROM usuario WHERE idUsuario = ? AND activo = TRUE',
+      [idUsuario]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado o inactivo' });
+    }
+
+    const coincide = await bcrypt.compare(password_actual, rows[0].password_hash);
+
+    if (!coincide) {
+      return res.status(401).json({ error: 'La contraseña actual no es correcta' });
+    }
+
+    const nuevoHash = await bcrypt.hash(password_nueva, BCRYPT_ROUNDS);
+
+    await pool.query(
+      'UPDATE usuario SET password_hash = ? WHERE idUsuario = ?',
+      [nuevoHash, idUsuario]
+    );
+
+    res.json({ message: 'Contraseña actualizada correctamente' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al cambiar la contraseña', detalle: error.message });
+  }
+});
+
 // =========================================================================
-// 4. RUTAS ADMINISTRATIVAS
+// 4. GESTIÓN DE USUARIOS (solo Administrador)
+// =========================================================================
+
+// Alta de una cuenta de funcionario (RF-11, RF-20)
+app.post('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req, res) => {
+  try {
+    const { nombre, correo_institucional, telefono, password, idRol, idMunicipio } = req.body;
+
+    if (!nombre || !correo_institucional || !password || !idRol || !idMunicipio) {
+      return res.status(400).json({
+        error: 'Se requiere nombre, correo_institucional, password, idRol e idMunicipio'
+      });
+    }
+
+    if (password.length < MIN_PASSWORD) {
+      return res.status(400).json({
+        error: 'La contraseña debe tener al menos ' + MIN_PASSWORD + ' caracteres'
+      });
+    }
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo_institucional)) {
+      return res.status(400).json({ error: 'El correo institucional no tiene un formato válido' });
+    }
+
+    const [rolRows] = await pool.query('SELECT idRol FROM rol WHERE idRol = ?', [idRol]);
+    if (rolRows.length === 0) {
+      return res.status(400).json({ error: 'El rol indicado no existe' });
+    }
+
+    const [munRows] = await pool.query('SELECT idMunicipio FROM municipio WHERE idMunicipio = ?', [idMunicipio]);
+    if (munRows.length === 0) {
+      return res.status(400).json({ error: 'El municipio indicado no existe' });
+    }
+
+    const [dup] = await pool.query(
+      'SELECT idUsuario FROM usuario WHERE correo_institucional = ?',
+      [correo_institucional]
+    );
+    if (dup.length > 0) {
+      return res.status(409).json({ error: 'Ya existe una cuenta con ese correo institucional' });
+    }
+
+    const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+    const [result] = await pool.query(
+      `INSERT INTO usuario (nombre, correo_institucional, telefono, password_hash, idRol, idMunicipio, activo)
+       VALUES (?, ?, ?, ?, ?, ?, TRUE)`,
+      [nombre, correo_institucional, telefono || null, hash, idRol, idMunicipio]
+    );
+
+    res.status(201).json({
+      message: 'Usuario registrado exitosamente',
+      idUsuario: result.insertId,
+      correo_institucional: correo_institucional
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al registrar usuario', detalle: error.message });
+  }
+});
+
+// Consulta de usuarios, con filtro opcional por municipio.
+// Nunca se devuelve el password_hash.
+app.get('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req, res) => {
+  try {
+    const { idMunicipio, idRol, activo } = req.query;
+
+    let sql = `
+      SELECT u.idUsuario, u.nombre, u.correo_institucional, u.telefono,
+             u.activo, u.ultimo_acceso,
+             u.idRol, r.nombre AS rol,
+             u.idMunicipio, m.nombre AS municipio, m.siglas
+      FROM usuario u
+      JOIN rol r ON u.idRol = r.idRol
+      JOIN municipio m ON u.idMunicipio = m.idMunicipio
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (idMunicipio) {
+      sql += ' AND u.idMunicipio = ?';
+      params.push(idMunicipio);
+    }
+
+    if (idRol) {
+      sql += ' AND u.idRol = ?';
+      params.push(idRol);
+    }
+
+    if (activo === 'true' || activo === 'false') {
+      sql += ' AND u.activo = ?';
+      params.push(activo === 'true' ? 1 : 0);
+    }
+
+    sql += ' ORDER BY m.nombre ASC, u.nombre ASC';
+
+    const [rows] = await pool.query(sql, params);
+    res.json({ total: rows.length, usuarios: rows });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al consultar usuarios', detalle: error.message });
+  }
+});
+
+// =========================================================================
+// 5. RUTAS ADMINISTRATIVAS
 // =========================================================================
 
 // Bandeja de reportes. El Alimentador solo ve su municipio (RF-12).

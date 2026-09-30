@@ -10,6 +10,7 @@ lambda.mjs              Punto de entrada para AWS Lambda
 server.mjs              Punto de entrada para correr en local
 db/schema_rieti.sql     Estructura de la base de datos
 db/seed_pruebas.sql     Datos ficticios para probar
+db/migrar_password_bcrypt.sql  Convierte contraseñas viejas a bcrypt
 .env.example            Plantilla de variables de entorno
 ```
 
@@ -66,6 +67,7 @@ transaccionales antes de volver a llenarlas.
 | GET | `/api/v1/reportes/:folio` | Consultar estatus por folio |
 | POST | `/api/v1/evidencias/presigned-url` | URL firmada para subir una foto a S3 |
 | POST | `/api/v1/evidencias/confirmar` | Vincular la foto subida con el reporte |
+| POST | `/api/v1/evidencias/url-lectura` | URL firmada para VER una foto (requiere token) |
 
 ### Autenticación
 
@@ -73,6 +75,7 @@ transaccionales antes de volver a llenarlas.
 |---|---|---|
 | POST | `/api/v1/auth/login` | Inicio de sesión, devuelve token JWT |
 | GET | `/api/v1/auth/me` | Datos del usuario autenticado |
+| POST | `/api/v1/auth/password` | Cambiar la propia contraseña |
 
 ### Administrativos (requieren token)
 
@@ -82,6 +85,8 @@ transaccionales antes de volver a llenarlas.
 | GET | `/api/v1/admin/reportes/:folio/expediente` | Expediente completo con bitácora e historial |
 | POST | `/api/v1/admin/atencion` | Registrar actuación y cambiar estatus |
 | POST | `/api/v1/admin/transferencias` | Transferencia, canalización a PPNNA o descarte |
+| POST | `/api/v1/admin/usuarios` | Alta de cuenta de funcionario (solo Administrador) |
+| GET | `/api/v1/admin/usuarios` | Consulta de cuentas. Acepta `?idMunicipio=`, `?idRol=`, `?activo=` |
 
 El rol Alimentador solo ve y atiende reportes de su municipio. Las
 transferencias y canalizaciones son exclusivas del rol Administrador.
@@ -94,11 +99,25 @@ transferencias y canalizaciones son exclusivas del rol Administrador.
 Cualquier cambio de estatus exige justificación y queda asentado en
 `historial_estatus`.
 
+## Contraseñas
+
+Se guardan como hash de bcrypt con costo 10, nunca en claro (RNF-31). El
+servidor no puede leer la contraseña de nadie: al iniciar sesión vuelve a
+calcular el hash y compara los resultados.
+
+Mínimo 8 caracteres, tanto al dar de alta una cuenta como al cambiarla.
+
+Si la base todavía tiene contraseñas en texto plano de una versión anterior,
+correr una sola vez `db/migrar_password_bcrypt.sql`. Sin eso, nadie puede
+entrar.
+
 ## Pendiente
 
-- El login compara la contraseña en texto plano. Antes de liberar hay que
-  guardarla con bcrypt y usar `bcrypt.compare` (RNF-31).
 - Falta el envío de correo por SES al generar folio y al cambiar estatus
   (RF-09, RNF-19). La tabla `notificacion` ya está lista para registrarlo.
 - Falta la limpieza de metadatos EXIF de las imágenes antes de guardarlas
   en S3 (RNF-32).
+- El backend no limita a 2 las evidencias por reporte (RF-05); ahora mismo
+  acepta las que se le manden.
+- No hay endpoint para desactivar o editar una cuenta ya creada. La baja
+  lógica se hace por SQL sobre el campo `activo`.

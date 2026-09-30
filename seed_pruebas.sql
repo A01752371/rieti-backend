@@ -20,16 +20,16 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 -- =========================================================================
 -- USUARIOS
--- La contraseña se guarda en texto plano mientras el login no use bcrypt.
--- Para todos: Rieti2026
+-- La contraseña de los 5 usuarios es: Rieti2026
+-- Se guarda como hash de bcrypt, nunca en claro (RNF-31).
 -- =========================================================================
 
 INSERT INTO usuario (nombre, correo_institucional, telefono, password_hash, idRol, idMunicipio, activo) VALUES
-('Ana Lucia Martinez Rivas',  'admin.sipinna@edomex.gob.mx',           '5512345678', 'Rieti2026', 1, 1, TRUE),
-('Carlos Hernandez Pena',     'procurador.tlalnepantla@edomex.gob.mx', '5523456789', 'Rieti2026', 2, 2, TRUE),
-('Laura Sanchez Dominguez',   'procurador.ecatepec@edomex.gob.mx',     '5534567890', 'Rieti2026', 2, 3, TRUE),
-('Miguel Angel Torres Cruz',  'procurador.atizapan@edomex.gob.mx',     '5545678901', 'Rieti2026', 2, 1, TRUE),
-('Patricia Gomez Valdes',     'procurador.tultitlan@edomex.gob.mx',    '5556789012', 'Rieti2026', 2, 5, FALSE);
+('Ana Lucia Martinez Rivas',  'admin.sipinna@edomex.gob.mx',           '5512345678', '$2b$10$L33P.l9IGRyzjFmgE5dDRevNoImhhewbCnll3fC/xKoAlzwzaDZWm', 1, 1, TRUE),
+('Carlos Hernandez Pena',     'procurador.tlalnepantla@edomex.gob.mx', '5523456789', '$2b$10$6w2Fnw8xPChy9rC4fRS.7eHpanIh6U52fnljJLs8x5OaTs3H1061.', 2, 2, TRUE),
+('Laura Sanchez Dominguez',   'procurador.ecatepec@edomex.gob.mx',     '5534567890', '$2b$10$kHgJ8mwEix7Ajz87dkojK.k80UHn4pc.bbtXI9qEbCBE1ylw2Pav6', 2, 3, TRUE),
+('Miguel Angel Torres Cruz',  'procurador.atizapan@edomex.gob.mx',     '5545678901', '$2b$10$TizGL08..67Z5YBl22qDve1DPjjYoY5nwhzGqF.nOdeBYGMCF3Q.y', 2, 1, TRUE),
+('Patricia Gomez Valdes',     'procurador.tultitlan@edomex.gob.mx',    '5556789012', '$2b$10$EPsvY3enW28XS.DI1UXble4iNmElN94rmoE0E37WTBxMdYZov3/P6', 2, 5, FALSE);
 
 -- =========================================================================
 -- REPORTES
