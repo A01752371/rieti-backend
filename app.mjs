@@ -161,10 +161,22 @@ app.post('/api/v1/reportes', async (req, res) => {
       acepto_aviso
     } = req.body;
 
-    // Campos obligatorios confirmados con el socio formador:
-    // correo de contacto, ubicación y aceptación del aviso de privacidad.
-    if (!correo_contacto) {
-      return res.status(400).json({ error: 'El correo electrónico de contacto es obligatorio' });
+    // La modalidad decide si el correo es obligatorio:
+    // ANONIMO     -> el ciudadano no deja correo y no recibe avisos
+    // SEGUIMIENTO -> el correo es obligatorio para mandarle el folio
+    const modalidadFinal = (modalidad || 'SEGUIMIENTO').toUpperCase();
+
+    if (modalidadFinal !== 'ANONIMO' && modalidadFinal !== 'SEGUIMIENTO') {
+      return res.status(400).json({
+        error: 'Modalidad no válida',
+        validas: ['ANONIMO', 'SEGUIMIENTO']
+      });
+    }
+
+    if (modalidadFinal === 'SEGUIMIENTO' && !correo_contacto) {
+      return res.status(400).json({
+        error: 'El correo electrónico es obligatorio en la modalidad SEGUIMIENTO'
+      });
     }
 
     if (!idMunicipio) {
@@ -218,8 +230,10 @@ app.post('/api/v1/reportes', async (req, res) => {
     const payloadIntegridad = `${folio}|${latitud}|${longitud}|${idCatalogoActividad}|${descripcion}`;
     const hash_sha256 = crypto.createHash('sha256').update(payloadIntegridad).digest('hex');
 
-    const modalidadFinal = modalidad || 'SEGUIMIENTO';
     const horaFinal = hora_observada || new Date().toTimeString().slice(0, 8);
+
+    // En modalidad anónima no se guarda correo aunque la app lo haya mandado
+    const correoFinal = modalidadFinal === 'ANONIMO' ? null : correo_contacto;
 
     await connection.query(
       `INSERT INTO reporte (
@@ -231,7 +245,7 @@ app.post('/api/v1/reportes', async (req, res) => {
       [
         folio,
         modalidadFinal,
-        correo_contacto,
+        correoFinal,
         num_menores || 1,
         rango_edad || 'No especificado',
         genero_observado || 'No especificado',
@@ -630,6 +644,145 @@ app.get('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req,
   }
 });
 
+// Editar los datos de un funcionario. Solo se tocan los campos que se manden.
+// El correo y la contraseña no se cambian por aquí.
+app.patch('/api/v1/admin/usuarios/:id', verificarToken, soloAdministrador, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { nombre, telefono, idRol, idMunicipio } = req.body;
+
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'El id del usuario no es válido' });
+    }
+
+    const [existe] = await pool.query('SELECT idUsuario FROM usuario WHERE idUsuario = ?', [id]);
+    if (existe.length === 0) {
+      return res.status(404).json({ error: 'El usuario no existe' });
+    }
+
+    const campos = [];
+    const params = [];
+
+    if (nombre !== undefined) {
+      if (!nombre.trim()) {
+        return res.status(400).json({ error: 'El nombre no puede quedar vacío' });
+      }
+      campos.push('nombre = ?');
+      params.push(nombre.trim());
+    }
+
+    if (telefono !== undefined) {
+      campos.push('telefono = ?');
+      params.push(telefono || null);
+    }
+
+    if (idRol !== undefined) {
+      const [rolRows] = await pool.query('SELECT idRol FROM rol WHERE idRol = ?', [idRol]);
+      if (rolRows.length === 0) {
+        return res.status(400).json({ error: 'El rol indicado no existe' });
+      }
+      campos.push('idRol = ?');
+      params.push(idRol);
+    }
+
+    if (idMunicipio !== undefined) {
+      const [munRows] = await pool.query('SELECT idMunicipio FROM municipio WHERE idMunicipio = ?', [idMunicipio]);
+      if (munRows.length === 0) {
+        return res.status(400).json({ error: 'El municipio indicado no existe' });
+      }
+      campos.push('idMunicipio = ?');
+      params.push(idMunicipio);
+    }
+
+    if (campos.length === 0) {
+      return res.status(400).json({
+        error: 'No se mandó ningún campo que modificar',
+        editables: ['nombre', 'telefono', 'idRol', 'idMunicipio']
+      });
+    }
+
+    params.push(id);
+    await pool.query('UPDATE usuario SET ' + campos.join(', ') + ' WHERE idUsuario = ?', params);
+
+    const [rows] = await pool.query(
+      `SELECT u.idUsuario, u.nombre, u.correo_institucional, u.telefono, u.activo,
+              u.idRol, r.nombre AS rol, u.idMunicipio, m.nombre AS municipio
+       FROM usuario u
+       JOIN rol r ON u.idRol = r.idRol
+       JOIN municipio m ON u.idMunicipio = m.idMunicipio
+       WHERE u.idUsuario = ?`,
+      [id]
+    );
+
+    res.json({ message: 'Usuario actualizado correctamente', usuario: rows[0] });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al actualizar usuario', detalle: error.message });
+  }
+});
+
+// Baja y alta lógica de una cuenta. No se borra el renglón porque bitacora,
+// historial_estatus y transferencia guardan referencias al funcionario.
+app.patch('/api/v1/admin/usuarios/:id/estado', verificarToken, soloAdministrador, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { activo } = req.body;
+
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'El id del usuario no es válido' });
+    }
+
+    if (typeof activo !== 'boolean') {
+      return res.status(400).json({ error: 'Se requiere activo con valor true o false' });
+    }
+
+    const [rows] = await pool.query(
+      'SELECT idUsuario, nombre, idRol, activo FROM usuario WHERE idUsuario = ?',
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'El usuario no existe' });
+    }
+
+    const usuario = rows[0];
+
+    if (!!usuario.activo === activo) {
+      return res.status(400).json({
+        error: 'La cuenta ya se encuentra ' + (activo ? 'activa' : 'inactiva')
+      });
+    }
+
+    // Protecciones para no dejar el sistema sin quien administre
+    if (!activo) {
+      if (id === req.usuario.idUsuario) {
+        return res.status(400).json({ error: 'No puede desactivar su propia cuenta' });
+      }
+
+      if (usuario.idRol === 1) {
+        const [admins] = await pool.query(
+          'SELECT COUNT(*) AS total FROM usuario WHERE idRol = 1 AND activo = TRUE'
+        );
+        if (admins[0].total <= 1) {
+          return res.status(400).json({
+            error: 'No se puede desactivar al único Administrador activo del sistema'
+          });
+        }
+      }
+    }
+
+    await pool.query('UPDATE usuario SET activo = ? WHERE idUsuario = ?', [activo ? 1 : 0, id]);
+
+    res.json({
+      message: 'Cuenta ' + (activo ? 'activada' : 'desactivada') + ' correctamente',
+      idUsuario: id,
+      nombre: usuario.nombre,
+      activo: activo
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al cambiar el estado de la cuenta', detalle: error.message });
+  }
+});
+
 // =========================================================================
 // 5. RUTAS ADMINISTRATIVAS
 // =========================================================================
@@ -705,6 +858,76 @@ app.get('/api/v1/admin/reportes/:folio/expediente', verificarToken, async (req, 
     res.json({ expediente: repRows[0], evidencias, bitacora, historial });
   } catch (error) {
     res.status(500).json({ error: 'Error al consultar expediente', detalle: error.message });
+  }
+});
+
+// Asignar un reporte al funcionario que lo va a atender (RF-16)
+app.post('/api/v1/admin/asignaciones', verificarToken, soloAdministrador, async (req, res) => {
+  try {
+    const { folio, idUsuario } = req.body;
+
+    if (!folio || !idUsuario) {
+      return res.status(400).json({ error: 'Se requiere folio e idUsuario' });
+    }
+
+    const [repRows] = await pool.query(
+      'SELECT folio, idMunicipio, estatus FROM reporte WHERE folio = ?',
+      [folio]
+    );
+    if (repRows.length === 0) {
+      return res.status(404).json({ error: 'El reporte no existe' });
+    }
+
+    const [usrRows] = await pool.query(
+      `SELECT u.idUsuario, u.nombre, u.activo, u.idMunicipio, m.nombre AS municipio
+       FROM usuario u
+       JOIN municipio m ON u.idMunicipio = m.idMunicipio
+       WHERE u.idUsuario = ?`,
+      [idUsuario]
+    );
+    if (usrRows.length === 0) {
+      return res.status(404).json({ error: 'El funcionario no existe' });
+    }
+
+    const funcionario = usrRows[0];
+
+    if (!funcionario.activo) {
+      return res.status(400).json({ error: 'El funcionario está dado de baja' });
+    }
+
+    // Nadie puede atender un reporte de un municipio que no es el suyo
+    if (funcionario.idMunicipio !== repRows[0].idMunicipio) {
+      return res.status(400).json({
+        error: 'El funcionario no pertenece al municipio del reporte',
+        municipio_funcionario: funcionario.municipio
+      });
+    }
+
+    const [yaAsignado] = await pool.query(
+      'SELECT idUsuario FROM asignacion WHERE folio = ?',
+      [folio]
+    );
+    if (yaAsignado.length > 0) {
+      return res.status(409).json({
+        error: 'El reporte ya está asignado',
+        idUsuario_actual: yaAsignado[0].idUsuario
+      });
+    }
+
+    const [result] = await pool.query(
+      'INSERT INTO asignacion (folio, idUsuario, fecha_asignacion) VALUES (?, ?, CURRENT_TIMESTAMP)',
+      [folio, idUsuario]
+    );
+
+    res.status(201).json({
+      message: 'Reporte asignado correctamente',
+      idAsignacion: result.insertId,
+      folio: folio,
+      idUsuario: idUsuario,
+      nombre: funcionario.nombre
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al asignar el reporte', detalle: error.message });
   }
 });
 
@@ -899,6 +1122,127 @@ app.post('/api/v1/admin/transferencias', verificarToken, soloAdministrador, asyn
     if (connection) {
       connection.release();
     }
+  }
+});
+
+// =========================================================================
+// 6. DASHBOARD
+// =========================================================================
+
+// Números para las tarjetas del panel. Se cuentan en la base, no en el cliente.
+// Un Alimentador solo ve los de su municipio.
+app.get('/api/v1/admin/dashboard/resumen', verificarToken, async (req, res) => {
+  try {
+    const { idRol, idMunicipio } = req.usuario;
+
+    let filtro = '';
+    const params = [];
+
+    if (idRol !== 1) {
+      filtro = ' WHERE idMunicipio = ?';
+      params.push(idMunicipio);
+    }
+
+    const [rows] = await pool.query(
+      'SELECT estatus, COUNT(*) AS total FROM reporte' + filtro + ' GROUP BY estatus',
+      params
+    );
+
+    // Las llaves salen siempre, aunque ese estatus no tenga reportes,
+    // para que el frontend no tenga que validar si existen.
+    const resumen = {
+      total: 0,
+      recibidos: 0,
+      en_revision: 0,
+      en_proceso: 0,
+      concluidos: 0,
+      reincidencias: 0,
+      canalizados: 0,
+      cancelados: 0
+    };
+
+    const llave = {
+      'Recibido': 'recibidos',
+      'En Revision': 'en_revision',
+      'En Proceso': 'en_proceso',
+      'Concluido': 'concluidos',
+      'Reincidencia': 'reincidencias',
+      'Canalizado': 'canalizados',
+      'Cancelado': 'cancelados'
+    };
+
+    rows.forEach(function (r) {
+      const total = Number(r.total);
+      resumen.total += total;
+      if (llave[r.estatus]) resumen[llave[r.estatus]] = total;
+    });
+
+    res.json(resumen);
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener el resumen', detalle: error.message });
+  }
+});
+
+// Datos agrupados para las gráficas del panel.
+app.get('/api/v1/admin/dashboard/estadisticas', verificarToken, async (req, res) => {
+  try {
+    const { idRol, idMunicipio } = req.usuario;
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 30, 1), 365);
+
+    let filtro = '';
+    const params = [];
+
+    if (idRol !== 1) {
+      filtro = ' WHERE r.idMunicipio = ?';
+      params.push(idMunicipio);
+    }
+
+    const [por_estatus] = await pool.query(
+      'SELECT r.estatus, COUNT(*) AS total FROM reporte r' + filtro +
+      ' GROUP BY r.estatus ORDER BY total DESC',
+      params
+    );
+
+    const [por_municipio] = await pool.query(
+      'SELECT m.nombre AS municipio, m.siglas, COUNT(*) AS total' +
+      ' FROM reporte r JOIN municipio m ON r.idMunicipio = m.idMunicipio' + filtro +
+      ' GROUP BY m.idMunicipio, m.nombre, m.siglas ORDER BY total DESC',
+      params
+    );
+
+    const [por_actividad] = await pool.query(
+      'SELECT c.nombre AS actividad, COUNT(*) AS total' +
+      ' FROM reporte r JOIN catalogo_actividad c ON r.idCatalogoActividad = c.idCatalogoActividad' + filtro +
+      ' GROUP BY c.idCatalogoActividad, c.nombre ORDER BY total DESC',
+      params
+    );
+
+    const [por_prioridad] = await pool.query(
+      'SELECT r.prioridad, COUNT(*) AS total FROM reporte r' + filtro +
+      ' GROUP BY r.prioridad ORDER BY total DESC',
+      params
+    );
+
+    const filtroFecha = filtro
+      ? filtro + ' AND r.fecha_registro >= DATE_SUB(CURRENT_DATE, INTERVAL ? DAY)'
+      : ' WHERE r.fecha_registro >= DATE_SUB(CURRENT_DATE, INTERVAL ? DAY)';
+
+    const [por_fecha] = await pool.query(
+      'SELECT DATE(r.fecha_registro) AS fecha, COUNT(*) AS total FROM reporte r' + filtroFecha +
+      ' GROUP BY DATE(r.fecha_registro) ORDER BY fecha ASC',
+      params.concat([dias])
+    );
+
+    res.json({
+      dias_considerados: dias,
+      por_estatus: por_estatus,
+      por_municipio: por_municipio,
+      por_actividad: por_actividad,
+      por_prioridad: por_prioridad,
+      por_fecha: por_fecha
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener las estadísticas', detalle: error.message });
   }
 });
 
