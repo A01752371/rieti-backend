@@ -129,11 +129,15 @@ app.get('/api/v1/catalogos/actividades', async (req, res) => {
 app.get('/api/v1/municipios', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT idMunicipio, nombre, siglas, clave_inegi FROM municipio WHERE adherido_rieti = TRUE ORDER BY nombre ASC'
+      'SELECT idMunicipio, nombre, siglas, clave_inegi, adherido_rieti FROM municipio ORDER BY nombre ASC'
     );
+
     res.json(rows);
   } catch (error) {
-    res.status(500).json({ error: 'Error al consultar municipios', detalle: error.message });
+    res.status(500).json({
+      error: 'Error al consultar municipios',
+      detalle: error.message
+    });
   }
 });
 
