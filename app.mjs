@@ -20,6 +20,14 @@ app.use(express.json());
 // Si la API se expone por API Gateway, el path llega con el stage y el recurso
 // al inicio (/default/rieti-backend/api/v1/...). Con Function URL y en local
 // llega limpio. Este middleware recorta el prefijo solo cuando existe.
+/**
+ * Normaliza la ruta recibida cuando la API se ejecuta detrás de API Gateway.
+ * Conserva sin cambios las rutas recibidas mediante Function URL o ejecución local.
+ *
+ * @param {import('express').Request} req Solicitud HTTP entrante.
+ * @param {import('express').Response} res Respuesta HTTP.
+ * @param {import('express').NextFunction} next Función para continuar con el siguiente middleware.
+ */
 app.use((req, res, next) => {
   const i = req.url.indexOf('/api/v1');
   if (i > 0) {
@@ -74,6 +82,15 @@ const ESTATUS = {
 // MIDDLEWARE DE AUTENTICACIÓN (JWT)
 // =========================================================================
 
+/**
+ * Verifica el token JWT enviado mediante el encabezado Authorization.
+ * Si el token es válido, almacena la información del usuario en req.usuario.
+ *
+ * @param {import('express').Request} req Solicitud HTTP.
+ * @param {import('express').Response} res Respuesta HTTP.
+ * @param {import('express').NextFunction} next Función para continuar con la solicitud.
+ * @returns {void}
+ */
 const verificarToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -91,6 +108,15 @@ const verificarToken = (req, res, next) => {
 };
 
 // Solo el rol Administrador (idRol 1) puede ejecutar la acción
+/**
+ * Restringe el acceso a usuarios con rol Administrador.
+ * Debe ejecutarse después de verificarToken.
+ *
+ * @param {import('express').Request} req Solicitud HTTP con req.usuario disponible.
+ * @param {import('express').Response} res Respuesta HTTP.
+ * @param {import('express').NextFunction} next Función para continuar con la solicitud.
+ * @returns {void}
+ */
 const soloAdministrador = (req, res, next) => {
   if (req.usuario.idRol !== 1) {
     return res.status(403).json({ error: 'Esta acción requiere perfil de Administrador' });
@@ -102,6 +128,12 @@ const soloAdministrador = (req, res, next) => {
 // HEALTHCHECK
 // =========================================================================
 
+/**
+ * Comprueba que el backend se encuentra disponible y que las variables
+ * principales de configuración están definidas.
+ *
+ * @route GET /health
+ */
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
@@ -115,6 +147,12 @@ app.get('/health', (req, res) => {
 // 1. RUTAS PÚBLICAS (MÓVIL Y FORMULARIO WEB)
 // =========================================================================
 
+/**
+ * Obtiene el catálogo de actividades registrado en la base de datos.
+ *
+ * @route GET /api/v1/catalogos/actividades
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/catalogos/actividades', async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -126,6 +164,12 @@ app.get('/api/v1/catalogos/actividades', async (req, res) => {
   }
 });
 
+/**
+ * Obtiene el catálogo de municipios disponibles en RIETI.
+ *
+ * @route GET /api/v1/municipios
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/municipios', async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -142,6 +186,14 @@ app.get('/api/v1/municipios', async (req, res) => {
 });
 
 // Registrar un nuevo reporte y generar folio con siglas (ej. RIETI-ATZ-2026-00001)
+/**
+ * Registra un nuevo reporte ciudadano.
+ * Valida los datos recibidos, genera un folio consecutivo por municipio,
+ * calcula una huella SHA-256 y almacena el reporte mediante una transacción.
+ *
+ * @route POST /api/v1/reportes
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/reportes', async (req, res) => {
   let connection;
   try {
@@ -292,6 +344,13 @@ app.post('/api/v1/reportes', async (req, res) => {
 });
 
 // Consulta ciudadana por folio. Devuelve solo campos públicos (RF-07, RF-08).
+/**
+ * Consulta el estado público de un reporte utilizando su folio.
+ * La respuesta excluye información interna del expediente.
+ *
+ * @route GET /api/v1/reportes/:folio
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/reportes/:folio', async (req, res) => {
   try {
     const { folio } = req.params;
@@ -317,6 +376,12 @@ app.get('/api/v1/reportes/:folio', async (req, res) => {
 // 2. EVIDENCIAS Y S3
 // =========================================================================
 
+/**
+ * Genera una URL prefirmada temporal para subir una evidencia a Amazon S3.
+ *
+ * @route POST /api/v1/evidencias/presigned-url
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/evidencias/presigned-url', async (req, res) => {
   try {
     const { folio, nombreArchivo, fileType } = req.body;
@@ -347,6 +412,12 @@ app.post('/api/v1/evidencias/presigned-url', async (req, res) => {
 });
 
 // Vincular la evidencia ya subida con el reporte. La purga es a los 10 días (RNF-32).
+/**
+ * Registra en la base de datos una evidencia previamente subida a Amazon S3.
+ *
+ * @route POST /api/v1/evidencias/confirmar
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/evidencias/confirmar', async (req, res) => {
   try {
     const { folio, key } = req.body;
@@ -373,6 +444,13 @@ app.post('/api/v1/evidencias/confirmar', async (req, res) => {
 // Generar una URL firmada de LECTURA para ver una evidencia.
 // El bucket es privado, así que esta es la única forma de mostrar la imagen.
 // Requiere sesión: las fotos son parte del expediente, no contenido público.
+/**
+ * Genera una URL temporal de lectura para una evidencia privada almacenada en S3.
+ * Verifica que la evidencia esté registrada y que el usuario tenga jurisdicción.
+ *
+ * @route POST /api/v1/evidencias/url-lectura
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/evidencias/url-lectura', verificarToken, async (req, res) => {
   try {
     const { key } = req.body;
@@ -427,6 +505,13 @@ app.post('/api/v1/evidencias/url-lectura', verificarToken, async (req, res) => {
 // 3. AUTENTICACIÓN
 // =========================================================================
 
+/**
+ * Autentica a un usuario institucional mediante correo y contraseña.
+ * Si las credenciales son válidas, genera un JWT con vigencia limitada.
+ *
+ * @route POST /api/v1/auth/login
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/auth/login', async (req, res) => {
   try {
     const { correo_institucional, password } = req.body;
@@ -492,12 +577,24 @@ app.post('/api/v1/auth/login', async (req, res) => {
   }
 });
 
+/**
+ * Devuelve la información contenida en el token de la sesión actual.
+ *
+ * @route GET /api/v1/auth/me
+ */
 app.get('/api/v1/auth/me', verificarToken, (req, res) => {
   res.json({ usuario: req.usuario });
 });
 
 // Cambio de contraseña propia. Cualquier usuario con sesión puede hacerlo,
 // pero debe comprobar que sabe la contraseña actual.
+/**
+ * Permite a un usuario autenticado cambiar su propia contraseña.
+ * Valida la contraseña actual antes de almacenar el nuevo hash.
+ *
+ * @route POST /api/v1/auth/password
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/auth/password', verificarToken, async (req, res) => {
   try {
     const { idUsuario } = req.usuario;
@@ -550,6 +647,13 @@ app.post('/api/v1/auth/password', verificarToken, async (req, res) => {
 // =========================================================================
 
 // Alta de una cuenta de funcionario (RF-11, RF-20)
+/**
+ * Registra una nueva cuenta institucional.
+ * Esta operación está restringida al rol Administrador.
+ *
+ * @route POST /api/v1/admin/usuarios
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const { nombre, correo_institucional, telefono, password, idRol, idMunicipio } = req.body;
@@ -608,6 +712,13 @@ app.post('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req
 
 // Consulta de usuarios, con filtro opcional por municipio.
 // Nunca se devuelve el password_hash.
+/**
+ * Obtiene la lista de usuarios institucionales con filtros opcionales.
+ * Nunca devuelve el hash de las contraseñas.
+ *
+ * @route GET /api/v1/admin/usuarios
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const { idMunicipio, idRol, activo } = req.query;
@@ -650,6 +761,12 @@ app.get('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req,
 
 // Editar los datos de un funcionario. Solo se tocan los campos que se manden.
 // El correo y la contraseña no se cambian por aquí.
+/**
+ * Modifica datos editables de una cuenta institucional existente.
+ *
+ * @route PATCH /api/v1/admin/usuarios/:id
+ * @returns {Promise<void>}
+ */
 app.patch('/api/v1/admin/usuarios/:id', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -726,6 +843,13 @@ app.patch('/api/v1/admin/usuarios/:id', verificarToken, soloAdministrador, async
 
 // Baja y alta lógica de una cuenta. No se borra el renglón porque bitacora,
 // historial_estatus y transferencia guardan referencias al funcionario.
+/**
+ * Activa o desactiva lógicamente una cuenta institucional.
+ * Incluye validaciones para evitar desactivar la propia cuenta o al único administrador.
+ *
+ * @route PATCH /api/v1/admin/usuarios/:id/estado
+ * @returns {Promise<void>}
+ */
 app.patch('/api/v1/admin/usuarios/:id/estado', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -792,6 +916,13 @@ app.patch('/api/v1/admin/usuarios/:id/estado', verificarToken, soloAdministrador
 // =========================================================================
 
 // Bandeja de reportes. El Alimentador solo ve su municipio (RF-12).
+/**
+ * Obtiene la bandeja administrativa de reportes.
+ * Los usuarios no administradores quedan limitados a su municipio.
+ *
+ * @route GET /api/v1/admin/reportes
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/reportes', verificarToken, async (req, res) => {
   try {
     const { idRol, idMunicipio } = req.usuario;
@@ -832,6 +963,13 @@ app.get('/api/v1/admin/reportes', verificarToken, async (req, res) => {
   }
 });
 
+/**
+ * Obtiene el expediente completo de un reporte, incluyendo evidencias,
+ * bitácora e historial de estatus.
+ *
+ * @route GET /api/v1/admin/reportes/:folio/expediente
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/reportes/:folio/expediente', verificarToken, async (req, res) => {
   try {
     const { folio } = req.params;
@@ -866,6 +1004,12 @@ app.get('/api/v1/admin/reportes/:folio/expediente', verificarToken, async (req, 
 });
 
 // Asignar un reporte al funcionario que lo va a atender (RF-16)
+/**
+ * Asigna un reporte a un funcionario activo del mismo municipio.
+ *
+ * @route POST /api/v1/admin/asignaciones
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/admin/asignaciones', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const { folio, idUsuario } = req.body;
@@ -936,6 +1080,13 @@ app.post('/api/v1/admin/asignaciones', verificarToken, soloAdministrador, async 
 });
 
 // Registrar una actuación en bitácora y, opcionalmente, cambiar el estatus
+/**
+ * Registra una actuación en la bitácora y permite actualizar opcionalmente
+ * el estatus del reporte dentro de una transacción.
+ *
+ * @route POST /api/v1/admin/atencion
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/admin/atencion', verificarToken, async (req, res) => {
   let connection;
   try {
@@ -1008,6 +1159,13 @@ app.post('/api/v1/admin/atencion', verificarToken, async (req, res) => {
 });
 
 // Transferencia intermunicipal (RF-21), canalización a PPNNA (RF-22) y descarte
+/**
+ * Procesa transferencias intermunicipales, canalizaciones a PPNNA
+ * y descartes administrativos.
+ *
+ * @route POST /api/v1/admin/transferencias
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/admin/transferencias', verificarToken, soloAdministrador, async (req, res) => {
   let connection;
   try {
@@ -1135,6 +1293,13 @@ app.post('/api/v1/admin/transferencias', verificarToken, soloAdministrador, asyn
 
 // Números para las tarjetas del panel. Se cuentan en la base, no en el cliente.
 // Un Alimentador solo ve los de su municipio.
+/**
+ * Obtiene los totales de reportes agrupados por estatus para el dashboard.
+ * Los Alimentadores solo reciben información correspondiente a su municipio.
+ *
+ * @route GET /api/v1/admin/dashboard/resumen
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/dashboard/resumen', verificarToken, async (req, res) => {
   try {
     const { idRol, idMunicipio } = req.usuario;
@@ -1188,6 +1353,13 @@ app.get('/api/v1/admin/dashboard/resumen', verificarToken, async (req, res) => {
 });
 
 // Datos agrupados para las gráficas del panel.
+/**
+ * Obtiene estadísticas agrupadas por estatus, municipio, actividad,
+ * prioridad y fecha para las gráficas del dashboard.
+ *
+ * @route GET /api/v1/admin/dashboard/estadisticas
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/dashboard/estadisticas', verificarToken, async (req, res) => {
   try {
     const { idRol, idMunicipio } = req.usuario;
