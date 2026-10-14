@@ -1,3 +1,14 @@
+/**
+ * @file app.mjs
+ * @description API REST principal del backend de RIETI.
+ * Gestiona rutas públicas, evidencias, autenticación, usuarios, operaciones
+ * administrativas, transferencias y datos del dashboard, además de la
+ * conexión con MySQL y Amazon S3.
+ * 
+ * @author Luis Alejandro Olvera Hernández
+ * @author Valeria Giselle Portilla Robles
+ */
+
 // app.mjs
 // Toda la lógica del backend RIETI vive aquí.
 // lambda.mjs la envuelve para AWS Lambda y server.mjs la levanta en local,
@@ -14,6 +25,11 @@ import crypto from 'crypto';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
+/**
+ * Aplicación principal de Express utilizada por el backend de RIETI.
+ *
+ * @type {import('express').Express}
+ */
 const app = express();
 
 // Detrás de la Function URL de Lambda la IP real del cliente llega en
@@ -26,8 +42,18 @@ app.set('trust proxy', 1);
 // Los puertos locales son los que usan las herramientas de desarrollo del
 // equipo: 5173 Vite, 3000 Next/CRA, 5500 Live Server de VS Code, 8080 otros.
 // Sirven para abrir el panel de pruebas y el front en la máquina de cada quien.
+/**
+ * Puertos locales permitidos para herramientas de desarrollo del frontend.
+ *
+ * @type {number[]}
+ */
 const PUERTOS_LOCALES = [5173, 3000, 5500, 8080];
 
+/**
+ * Orígenes locales construidos a partir de los puertos de desarrollo.
+ *
+ * @type {string[]}
+ */
 const ORIGENES_LOCALES = PUERTOS_LOCALES.flatMap((p) => [
   `http://localhost:${p}`,
   `http://127.0.0.1:${p}`
@@ -35,6 +61,12 @@ const ORIGENES_LOCALES = PUERTOS_LOCALES.flatMap((p) => [
 
 // CORS_EXTRA_ORIGINS permite agregar orígenes sin volver a desplegar.
 // Normalmente va vacía.
+/**
+ * Lista de orígenes autorizados para solicitudes CORS desde navegadores.
+ * Puede ampliarse mediante variables de entorno sin modificar el código.
+ *
+ * @type {string[]}
+ */
 const ORIGENES_PERMITIDOS = [
   ...ORIGENES_LOCALES,
   process.env.FRONTEND_WEB_URL,
@@ -56,6 +88,15 @@ app.use(cookieParser());
 // Si la API se expone por API Gateway, el path llega con el stage y el recurso
 // al inicio (/default/rieti-backend/api/v1/...). Con Function URL y en local
 // llega limpio. Este middleware recorta el prefijo solo cuando existe.
+/**
+ * Normaliza la ruta recibida cuando la API se ejecuta detrás de API Gateway
+ * o mediante una ruta que incluye un prefijo antes de /api/v1.
+ *
+ * @param {import('express').Request} req Solicitud HTTP entrante.
+ * @param {import('express').Response} res Respuesta HTTP.
+ * @param {import('express').NextFunction} next Función para continuar con el siguiente middleware.
+ * @returns {void}
+ */
 app.use((req, res, next) => {
   const i = req.url.indexOf('/api/v1');
   if (i > 0) {
@@ -71,12 +112,23 @@ app.use((req, res, next) => {
 // =========================================================================
 
 // Sin secreto la función no arranca, en lugar de firmar con una clave conocida.
+/**
+ * Secreto utilizado para firmar y verificar los tokens JWT.
+ * Debe existir como variable de entorno para que el backend pueda iniciar.
+ *
+ * @type {string}
+ */
 const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!JWT_SECRET) {
   throw new Error('Falta la variable de entorno JWT_SECRET');
 }
 
+/**
+ * Pool de conexiones MySQL utilizado para acceder a la base de datos RIETI.
+ *
+ * @type {import('mysql2/promise').Pool}
+ */
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -91,21 +143,56 @@ const pool = mysql.createPool({
   }
 });
 
+/**
+ * Cliente de Amazon S3 utilizado para cargar y consultar evidencias.
+ *
+ * @type {S3Client}
+ */
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+/**
+ * Nombre del bucket privado donde se almacenan las evidencias.
+ *
+ * @type {string|undefined}
+ */
 const BUCKET_NAME = process.env.S3_BUCKET_NAME;
 
 // Costo de bcrypt. Más alto = más lento de romper, pero también de validar.
+/**
+ * Número de rondas utilizadas por bcrypt para generar hashes de contraseñas.
+ *
+ * @type {number}
+ */
 const BCRYPT_ROUNDS = 10;
 
 // Longitud mínima de contraseña
+/**
+ * Longitud mínima permitida para contraseñas institucionales.
+ *
+ * @type {number}
+ */
 const MIN_PASSWORD = 8;
 
 // Longitud máxima de los campos de texto libre del reporte.
 // Debe coincidir con VARCHAR de la base (db/migrar_limites_campos.sql).
+/**
+ * Longitud máxima permitida para la descripción de un reporte.
+ *
+ * @type {number}
+ */
 const MAX_DESCRIPCION = 500;
+/**
+ * Longitud máxima permitida para las referencias de ubicación.
+ *
+ * @type {number}
+ */
 const MAX_REFERENCIAS = 100;
 
 // Estatus válidos del reporte. Deben coincidir con el catálogo del diseño.
+/**
+ * Catálogo de estatus válidos para los reportes.
+ *
+ * @type {Object<string, string>}
+ */
 const ESTATUS = {
   RECIBIDO: 'Recibido',
   EN_REVISION: 'En Revision',
@@ -119,6 +206,10 @@ const ESTATUS = {
 // Rate limiting del login (RNF-07): 10 intentos por IP cada 15 minutos.
 // El contador vive en la memoria de la instancia de Lambda, así que el límite
 // es por contenedor y no global. Es una primera barrera, no una garantía.
+/**
+ * Limitador de intentos de inicio de sesión por IP.
+ * Reduce intentos repetidos de autenticación dentro de una ventana de tiempo.
+ */
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: Number(process.env.LOGIN_RATE_LIMIT) || 10,
@@ -133,6 +224,16 @@ const loginLimiter = rateLimit({
 // MIDDLEWARE DE AUTENTICACIÓN (JWT)
 // =========================================================================
 
+/**
+ * Valida la sesión de un usuario mediante JWT.
+ * Acepta el token desde una cookie HttpOnly o desde Authorization Bearer.
+ * También verifica que la cuenta siga activa en la base de datos.
+ *
+ * @param {import('express').Request} req Solicitud HTTP.
+ * @param {import('express').Response} res Respuesta HTTP.
+ * @param {import('express').NextFunction} next Función para continuar con la solicitud.
+ * @returns {Promise<void>}
+ */
 const verificarToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
 
@@ -176,6 +277,15 @@ const verificarToken = async (req, res, next) => {
 };
 
 // Solo el rol Administrador (idRol 1) puede ejecutar la acción
+/**
+ * Restringe una ruta al rol Administrador.
+ * Debe ejecutarse después de verificarToken.
+ *
+ * @param {import('express').Request} req Solicitud HTTP autenticada.
+ * @param {import('express').Response} res Respuesta HTTP.
+ * @param {import('express').NextFunction} next Función para continuar con la solicitud.
+ * @returns {void}
+ */
 const soloAdministrador = (req, res, next) => {
   if (req.usuario.idRol !== 1) {
     return res.status(403).json({ error: 'Esta acción requiere perfil de Administrador' });
@@ -187,6 +297,12 @@ const soloAdministrador = (req, res, next) => {
 // HEALTHCHECK
 // =========================================================================
 
+/**
+ * Comprueba que el backend esté disponible y que la configuración principal
+ * haya sido cargada.
+ *
+ * @route GET /health
+ */
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
@@ -200,6 +316,12 @@ app.get('/health', (req, res) => {
 // 1. RUTAS PÚBLICAS (MÓVIL Y FORMULARIO WEB)
 // =========================================================================
 
+/**
+ * Obtiene el catálogo de actividades registradas en RIETI.
+ *
+ * @route GET /api/v1/catalogos/actividades
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/catalogos/actividades', async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -211,6 +333,13 @@ app.get('/api/v1/catalogos/actividades', async (req, res) => {
   }
 });
 
+/**
+ * Obtiene el catálogo completo de municipios junto con su indicador
+ * de adhesión a RIETI.
+ *
+ * @route GET /api/v1/municipios
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/municipios', async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -227,6 +356,14 @@ app.get('/api/v1/municipios', async (req, res) => {
 });
 
 // Registrar un nuevo reporte y generar folio con siglas (ej. RIETI-ATZ-2026-00001)
+/**
+ * Registra un nuevo reporte ciudadano.
+ * Valida los datos recibidos, genera un folio consecutivo por municipio,
+ * calcula una huella SHA-256 y almacena el reporte dentro de una transacción.
+ *
+ * @route POST /api/v1/reportes
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/reportes', async (req, res) => {
   let connection;
   try {
@@ -391,6 +528,13 @@ app.post('/api/v1/reportes', async (req, res) => {
 });
 
 // Consulta ciudadana por folio. Devuelve solo campos públicos (RF-07, RF-08).
+/**
+ * Consulta el estado público de un reporte mediante su folio.
+ * Devuelve únicamente información destinada al seguimiento ciudadano.
+ *
+ * @route GET /api/v1/reportes/:folio
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/reportes/:folio', async (req, res) => {
   try {
     const { folio } = req.params;
@@ -416,6 +560,13 @@ app.get('/api/v1/reportes/:folio', async (req, res) => {
 // 2. EVIDENCIAS Y S3
 // =========================================================================
 
+/**
+ * Genera una URL prefirmada temporal para cargar una evidencia en Amazon S3.
+ * Verifica previamente que el folio indicado exista.
+ *
+ * @route POST /api/v1/evidencias/presigned-url
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/evidencias/presigned-url', async (req, res) => {
   try {
     const { folio, nombreArchivo, fileType } = req.body;
@@ -456,6 +607,13 @@ app.post('/api/v1/evidencias/presigned-url', async (req, res) => {
 });
 
 // Vincular la evidencia ya subida con el reporte. La purga es a los 10 días (RNF-32).
+/**
+ * Registra en MySQL una evidencia previamente cargada en Amazon S3.
+ * Verifica que la ruta de S3 corresponda al folio indicado.
+ *
+ * @route POST /api/v1/evidencias/confirmar
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/evidencias/confirmar', async (req, res) => {
   try {
     const { folio, key } = req.body;
@@ -512,6 +670,13 @@ app.post('/api/v1/evidencias/confirmar', async (req, res) => {
 // Generar una URL firmada de LECTURA para ver una evidencia.
 // El bucket es privado, así que esta es la única forma de mostrar la imagen.
 // Requiere sesión: las fotos son parte del expediente, no contenido público.
+/**
+ * Genera una URL temporal de lectura para una evidencia privada almacenada en S3.
+ * Verifica que la evidencia exista y que el usuario tenga jurisdicción para verla.
+ *
+ * @route POST /api/v1/evidencias/url-lectura
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/evidencias/url-lectura', verificarToken, async (req, res) => {
   try {
     const { key } = req.body;
@@ -566,6 +731,15 @@ app.post('/api/v1/evidencias/url-lectura', verificarToken, async (req, res) => {
 // 3. AUTENTICACIÓN
 // =========================================================================
 
+/**
+ * Autentica a un usuario institucional.
+ * Verifica la contraseña con bcrypt, genera un JWT y establece una cookie
+ * de sesión para el panel web, conservando el token en la respuesta para
+ * clientes móviles.
+ *
+ * @route POST /api/v1/auth/login
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/auth/login', loginLimiter, async (req, res) => {
   try {
     const { correo_institucional, password } = req.body;
@@ -640,12 +814,22 @@ app.post('/api/v1/auth/login', loginLimiter, async (req, res) => {
   }
 });
 
+/**
+ * Devuelve la información de la sesión autenticada actual.
+ *
+ * @route GET /api/v1/auth/me
+ */
 app.get('/api/v1/auth/me', verificarToken, (req, res) => {
   res.json({ usuario: req.usuario });
 });
 
 // Cierre de sesión del panel web. No pide token: si la cookie ya venció
 // igual hay que borrarla del navegador.
+/**
+ * Cierra la sesión del panel web eliminando la cookie de autenticación.
+ *
+ * @route POST /api/v1/auth/logout
+ */
 app.post('/api/v1/auth/logout', (req, res) => {
   res.clearCookie('rieti_token', {
     httpOnly: true,
@@ -658,6 +842,13 @@ app.post('/api/v1/auth/logout', (req, res) => {
 
 // Cambio de contraseña propia. Cualquier usuario con sesión puede hacerlo,
 // pero debe comprobar que sabe la contraseña actual.
+/**
+ * Permite a un usuario autenticado cambiar su contraseña.
+ * Verifica la contraseña actual antes de generar y almacenar el nuevo hash.
+ *
+ * @route POST /api/v1/auth/password
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/auth/password', verificarToken, async (req, res) => {
   try {
     const { idUsuario } = req.usuario;
@@ -710,6 +901,13 @@ app.post('/api/v1/auth/password', verificarToken, async (req, res) => {
 // =========================================================================
 
 // Alta de una cuenta de funcionario (RF-11, RF-20)
+/**
+ * Registra una nueva cuenta institucional.
+ * Solo puede ser ejecutado por un Administrador.
+ *
+ * @route POST /api/v1/admin/usuarios
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const { nombre, correo_institucional, telefono, password, idRol, idMunicipio } = req.body;
@@ -768,6 +966,13 @@ app.post('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req
 
 // Consulta de usuarios, con filtro opcional por municipio.
 // Nunca se devuelve el password_hash.
+/**
+ * Obtiene la lista de usuarios institucionales con filtros opcionales.
+ * No devuelve hashes de contraseña.
+ *
+ * @route GET /api/v1/admin/usuarios
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const { idMunicipio, idRol, activo } = req.query;
@@ -810,6 +1015,12 @@ app.get('/api/v1/admin/usuarios', verificarToken, soloAdministrador, async (req,
 
 // Editar los datos de un funcionario. Solo se tocan los campos que se manden.
 // El correo y la contraseña no se cambian por aquí.
+/**
+ * Modifica los datos editables de una cuenta institucional existente.
+ *
+ * @route PATCH /api/v1/admin/usuarios/:id
+ * @returns {Promise<void>}
+ */
 app.patch('/api/v1/admin/usuarios/:id', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -886,6 +1097,13 @@ app.patch('/api/v1/admin/usuarios/:id', verificarToken, soloAdministrador, async
 
 // Baja y alta lógica de una cuenta. No se borra el renglón porque bitacora,
 // historial_estatus y transferencia guardan referencias al funcionario.
+/**
+ * Activa o desactiva lógicamente una cuenta institucional.
+ * Evita desactivar la cuenta propia o al único Administrador activo.
+ *
+ * @route PATCH /api/v1/admin/usuarios/:id/estado
+ * @returns {Promise<void>}
+ */
 app.patch('/api/v1/admin/usuarios/:id/estado', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -952,6 +1170,13 @@ app.patch('/api/v1/admin/usuarios/:id/estado', verificarToken, soloAdministrador
 // =========================================================================
 
 // Bandeja de reportes. El Alimentador solo ve su municipio (RF-12).
+/**
+ * Obtiene la bandeja administrativa de reportes.
+ * Los Alimentadores solo pueden consultar reportes de su municipio.
+ *
+ * @route GET /api/v1/admin/reportes
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/reportes', verificarToken, async (req, res) => {
   try {
     const { idRol, idMunicipio } = req.usuario;
@@ -992,6 +1217,13 @@ app.get('/api/v1/admin/reportes', verificarToken, async (req, res) => {
   }
 });
 
+/**
+ * Obtiene el expediente completo de un reporte, incluyendo evidencias,
+ * bitácora e historial de estatus.
+ *
+ * @route GET /api/v1/admin/reportes/:folio/expediente
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/reportes/:folio/expediente', verificarToken, async (req, res) => {
   try {
     const { folio } = req.params;
@@ -1026,6 +1258,12 @@ app.get('/api/v1/admin/reportes/:folio/expediente', verificarToken, async (req, 
 });
 
 // Asignar un reporte al funcionario que lo va a atender (RF-16)
+/**
+ * Asigna un reporte a un funcionario activo del mismo municipio.
+ *
+ * @route POST /api/v1/admin/asignaciones
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/admin/asignaciones', verificarToken, soloAdministrador, async (req, res) => {
   try {
     const { folio, idUsuario } = req.body;
@@ -1096,6 +1334,14 @@ app.post('/api/v1/admin/asignaciones', verificarToken, soloAdministrador, async 
 });
 
 // Registrar una actuación en bitácora y, opcionalmente, cambiar el estatus
+/**
+ * Registra una actuación en la bitácora y permite actualizar opcionalmente
+ * el estatus del reporte dentro de una transacción.
+ * Los Alimentadores solo pueden atender reportes de su municipio.
+ *
+ * @route POST /api/v1/admin/atencion
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/admin/atencion', verificarToken, async (req, res) => {
   let connection;
   try {
@@ -1179,6 +1425,13 @@ app.post('/api/v1/admin/atencion', verificarToken, async (req, res) => {
 });
 
 // Transferencia intermunicipal (RF-21), canalización a PPNNA (RF-22) y descarte
+/**
+ * Procesa transferencias intermunicipales, canalizaciones a PPNNA
+ * y descartes administrativos.
+ *
+ * @route POST /api/v1/admin/transferencias
+ * @returns {Promise<void>}
+ */
 app.post('/api/v1/admin/transferencias', verificarToken, soloAdministrador, async (req, res) => {
   let connection;
   try {
@@ -1306,6 +1559,13 @@ app.post('/api/v1/admin/transferencias', verificarToken, soloAdministrador, asyn
 
 // Números para las tarjetas del panel. Se cuentan en la base, no en el cliente.
 // Un Alimentador solo ve los de su municipio.
+/**
+ * Obtiene los totales de reportes agrupados por estatus para las tarjetas
+ * principales del dashboard.
+ *
+ * @route GET /api/v1/admin/dashboard/resumen
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/dashboard/resumen', verificarToken, async (req, res) => {
   try {
     const { idRol, idMunicipio } = req.usuario;
@@ -1359,6 +1619,13 @@ app.get('/api/v1/admin/dashboard/resumen', verificarToken, async (req, res) => {
 });
 
 // Datos agrupados para las gráficas del panel.
+/**
+ * Obtiene estadísticas agrupadas por estatus, municipio, actividad,
+ * prioridad y fecha para las gráficas del dashboard.
+ *
+ * @route GET /api/v1/admin/dashboard/estadisticas
+ * @returns {Promise<void>}
+ */
 app.get('/api/v1/admin/dashboard/estadisticas', verificarToken, async (req, res) => {
   try {
     const { idRol, idMunicipio } = req.usuario;
@@ -1422,6 +1689,12 @@ app.get('/api/v1/admin/dashboard/estadisticas', verificarToken, async (req, res)
 });
 
 // Cualquier ruta no encontrada responde JSON, no el HTML de Express
+/**
+ * Middleware final para responder en JSON cuando ninguna ruta coincide.
+ *
+ * @param {import('express').Request} req Solicitud HTTP no atendida.
+ * @param {import('express').Response} res Respuesta HTTP.
+ */
 app.use((req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada', ruta_recibida: req.originalUrl });
 });
