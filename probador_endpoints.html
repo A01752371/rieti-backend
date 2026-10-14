@@ -437,6 +437,82 @@
 
   #r_progreso:not(:empty) { margin: 4px 0 10px; }
 
+  /* ---------- Panel de resultados de la suite ---------- */
+
+  .suite {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+
+  .suite-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .suite-title {
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .marcador {
+    display: flex;
+    gap: 14px;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .marcador b { font-variant-numeric: tabular-nums; }
+  .m-ok { color: var(--ok); }
+  .m-fail { color: var(--err); }
+
+  .suite-body { padding: 4px 0; max-height: 420px; overflow-y: auto; }
+
+  .caso {
+    display: grid;
+    grid-template-columns: 22px 1fr auto auto;
+    gap: 10px;
+    align-items: center;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  }
+
+  .caso:last-child { border-bottom: none; }
+  .caso .marca { font-weight: 700; font-size: 13px; }
+  .caso.ok .marca { color: var(--ok); }
+  .caso.fail .marca { color: var(--err); }
+  .caso.run .marca { color: var(--text-dim); }
+  .caso.fail { background: color-mix(in srgb, var(--err) 7%, transparent); }
+
+  .caso-nombre { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .caso-rf { font-size: 10.5px; color: var(--text-dim); font-family: var(--mono); }
+
+  .caso-cods {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  .caso.fail .caso-cods { color: var(--err); font-weight: 600; }
+
+  .grupo {
+    padding: 9px 14px 4px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    font-weight: 650;
+  }
+
   .flow-step {
     display: flex;
     align-items: center;
@@ -484,6 +560,7 @@
     <input id="baseUrl" value="https://csyacibpg4mwuom4vwqyem4bie0asjsc.lambda-url.us-east-1.on.aws"
            placeholder="URL base de la API" aria-label="URL base de la API">
     <span class="token-chip" id="tokenChip"><span class="dot"></span><span id="tokenText">Sin sesión</span></span>
+    <button id="btnSuite">Correr todas las pruebas</button>
     <button class="ghost small" id="btnTheme" title="Cambiar tema">Tema</button>
   </div>
 </header>
@@ -575,7 +652,7 @@
             </select>
           </div>
           <div class="field">
-            <label for="r_correo">correo_contacto</label>
+            <label for="r_correo">correo_contacto (solo SEGUIMIENTO)</label>
             <input id="r_correo" value="ciudadano.prueba@correo.com">
           </div>
           <div class="field">
@@ -914,6 +991,83 @@
       </div>
     </div>
 
+    <div class="card" data-ep="editarUsuario">
+      <div class="card-head">
+        <span class="verb PUT">PATCH</span>
+        <span class="path">/api/v1/admin/usuarios/:id</span>
+        <span class="lock">solo Administrador</span>
+        <span class="chev">&rsaquo;</span>
+      </div>
+      <div class="card-body">
+        <p class="desc">Edita los datos de un funcionario. Solo se mandan los campos que se quieran cambiar; deja vacío lo demás.</p>
+        <div class="fields">
+          <div class="field">
+            <label for="eu_id">idUsuario a editar</label>
+            <input id="eu_id" type="number" value="4">
+          </div>
+          <div class="field">
+            <label for="eu_nombre">nombre</label>
+            <input id="eu_nombre" value="Miguel Angel Torres Cruz">
+          </div>
+          <div class="field">
+            <label for="eu_tel">telefono</label>
+            <input id="eu_tel" value="5545678901">
+          </div>
+          <div class="field">
+            <label for="eu_rol">idRol</label>
+            <select id="eu_rol">
+              <option value="">&mdash; no cambiar &mdash;</option>
+              <option value="1">1 &mdash; Administrador</option>
+              <option value="2">2 &mdash; Alimentador</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="eu_mun">idMunicipio</label>
+            <select id="eu_mun">
+              <option value="">&mdash; no cambiar &mdash;</option>
+              <option value="1">1 &mdash; Atizapan</option>
+              <option value="2">2 &mdash; Tlalnepantla</option>
+              <option value="3">3 &mdash; Ecatepec</option>
+              <option value="4">4 &mdash; Cuautitlan Izcalli</option>
+              <option value="5">5 &mdash; Tultitlan</option>
+              <option value="6">6 &mdash; Coacalco</option>
+              <option value="7">7 &mdash; Toluca</option>
+            </select>
+          </div>
+        </div>
+        <div class="btn-row"><button data-send="editarUsuario">Enviar</button></div>
+      </div>
+    </div>
+
+    <div class="card" data-ep="estadoUsuario">
+      <div class="card-head">
+        <span class="verb PUT">PATCH</span>
+        <span class="path">/api/v1/admin/usuarios/:id/estado</span>
+        <span class="lock">solo Administrador</span>
+        <span class="chev">&rsaquo;</span>
+      </div>
+      <div class="card-body">
+        <p class="desc">Baja o alta lógica de una cuenta. No borra el renglón, porque la bitácora guarda referencias al funcionario.</p>
+        <div class="fields">
+          <div class="field">
+            <label for="es_id">idUsuario</label>
+            <input id="es_id" type="number" value="5">
+          </div>
+          <div class="field">
+            <label for="es_activo">activo</label>
+            <select id="es_activo">
+              <option value="true">true &mdash; activar</option>
+              <option value="false">false &mdash; desactivar</option>
+            </select>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button data-send="estadoUsuario">Enviar</button>
+          <span class="hint">No deja desactivar tu propia cuenta ni al último admin.</span>
+        </div>
+      </div>
+    </div>
+
     <h2>Panel administrativo</h2>
 
     <div class="card" data-ep="bandeja">
@@ -1070,6 +1224,66 @@
       </div>
     </div>
 
+    <div class="card" data-ep="asignar">
+      <div class="card-head">
+        <span class="verb POST">POST</span>
+        <span class="path">/api/v1/admin/asignaciones</span>
+        <span class="lock">solo Administrador</span>
+        <span class="chev">&rsaquo;</span>
+      </div>
+      <div class="card-body">
+        <p class="desc">Asigna el reporte al funcionario que lo va a atender. El funcionario debe estar activo y ser del mismo municipio.</p>
+        <div class="fields">
+          <div class="field">
+            <label for="as_folio">folio</label>
+            <input id="as_folio" class="folio-sync" value="RIETI-ATZ-2026-00001">
+          </div>
+          <div class="field">
+            <label for="as_usuario">idUsuario</label>
+            <input id="as_usuario" type="number" value="4">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button data-send="asignar">Enviar</button>
+          <span class="hint">Si ya estaba asignado responde 409.</span>
+        </div>
+      </div>
+    </div>
+
+    <h2>Dashboard</h2>
+
+    <div class="card" data-ep="resumen">
+      <div class="card-head">
+        <span class="verb GET">GET</span>
+        <span class="path">/api/v1/admin/dashboard/resumen</span>
+        <span class="lock">token</span>
+        <span class="chev">&rsaquo;</span>
+      </div>
+      <div class="card-body">
+        <p class="desc">Conteos por estatus para las tarjetas del panel. Un Alimentador solo ve los de su municipio.</p>
+        <div class="btn-row"><button data-send="resumen">Enviar</button></div>
+      </div>
+    </div>
+
+    <div class="card" data-ep="estadisticas">
+      <div class="card-head">
+        <span class="verb GET">GET</span>
+        <span class="path">/api/v1/admin/dashboard/estadisticas</span>
+        <span class="lock">token</span>
+        <span class="chev">&rsaquo;</span>
+      </div>
+      <div class="card-body">
+        <p class="desc">Datos agrupados para las gráficas: por estatus, municipio, actividad, prioridad y fecha.</p>
+        <div class="fields">
+          <div class="field">
+            <label for="es_dias">dias (para la serie por fecha)</label>
+            <input id="es_dias" type="number" value="30" min="1" max="365">
+          </div>
+        </div>
+        <div class="btn-row"><button data-send="estadisticas">Enviar</button></div>
+      </div>
+    </div>
+
     <h2>Casos de error</h2>
 
     <div class="card" data-ep="errores">
@@ -1095,13 +1309,30 @@
           <button class="ghost small" data-send="errPassCorta">Contraseña de 3 caracteres &rarr; 400</button>
           <button class="ghost small" data-send="errUsuarioAlim">Alta de usuario sin ser admin &rarr; 403</button>
           <button class="ghost small" data-send="errLecturaFake">URL de lectura de evidencia inventada &rarr; 404</button>
+          <button class="ghost small" data-send="errSegSinCorreo">SEGUIMIENTO sin correo &rarr; 400</button>
+          <button class="ghost small" data-send="errModalidad">Modalidad inventada &rarr; 400</button>
+          <button class="ghost small" data-send="errAsignOtroMun">Asignar a funcionario de otro municipio &rarr; 400</button>
+          <button class="ghost small" data-send="errAutoDesactivar">Desactivarse a sí mismo &rarr; 400</button>
         </div>
       </div>
     </div>
 
   </main>
 
-  <aside class="console-wrap">
+  <aside>
+  <div class="suite" id="suite" style="display:none">
+    <div class="suite-head">
+      <span class="suite-title">Resultados</span>
+      <div class="marcador">
+        <span class="m-ok">Pasaron <b id="mOk">0</b></span>
+        <span class="m-fail">Fallaron <b id="mFail">0</b></span>
+        <span class="hint" id="mEstado"></span>
+      </div>
+    </div>
+    <div class="suite-body" id="suiteBody"></div>
+  </div>
+
+  <div class="console-wrap">
     <div class="console-head">
       <span class="console-title">Consola</span>
       <div class="btn-row">
@@ -1112,6 +1343,7 @@
     <div id="log">
       <div class="empty">Las peticiones y respuestas aparecen aquí.</div>
     </div>
+  </div>
   </aside>
 
 </div>
@@ -1500,6 +1732,36 @@
       }, true);
     },
 
+    asignar: function () {
+      pedir('POST', '/api/v1/admin/asignaciones', {
+        folio: val('as_folio'),
+        idUsuario: parseInt(val('as_usuario'), 10)
+      }, true);
+    },
+
+    editarUsuario: function () {
+      var cuerpo = {};
+      if (val('eu_nombre')) cuerpo.nombre = val('eu_nombre');
+      if (val('eu_tel')) cuerpo.telefono = val('eu_tel');
+      if (val('eu_rol')) cuerpo.idRol = parseInt(val('eu_rol'), 10);
+      if (val('eu_mun')) cuerpo.idMunicipio = parseInt(val('eu_mun'), 10);
+      pedir('PATCH', '/api/v1/admin/usuarios/' + val('eu_id'), cuerpo, true);
+    },
+
+    estadoUsuario: function () {
+      pedir('PATCH', '/api/v1/admin/usuarios/' + val('es_id') + '/estado', {
+        activo: val('es_activo') === 'true'
+      }, true);
+    },
+
+    resumen: function () {
+      pedir('GET', '/api/v1/admin/dashboard/resumen', null, true);
+    },
+
+    estadisticas: function () {
+      pedir('GET', '/api/v1/admin/dashboard/estadisticas?dias=' + encodeURIComponent(val('es_dias')), null, true);
+    },
+
     listarUsuarios: function () {
       var q = [];
       if (val('lu_mun')) q.push('idMunicipio=' + encodeURIComponent(val('lu_mun')));
@@ -1625,8 +1887,410 @@
     },
     errLecturaFake: function () {
       pedir('POST', '/api/v1/evidencias/url-lectura', { key: 'evidencias/no/existe.jpg' }, true);
+    },
+    errSegSinCorreo: function () {
+      var c = cuerpoReporte(); c.modalidad = 'SEGUIMIENTO'; delete c.correo_contacto;
+      pedir('POST', '/api/v1/reportes', c);
+    },
+    errModalidad: function () {
+      var c = cuerpoReporte(); c.modalidad = 'LOQUESEA';
+      pedir('POST', '/api/v1/reportes', c);
+    },
+    errAsignOtroMun: function () {
+      pedir('POST', '/api/v1/admin/asignaciones', { folio: val('as_folio'), idUsuario: 2 }, true);
+    },
+    errAutoDesactivar: function () {
+      pedir('PATCH', '/api/v1/admin/usuarios/1/estado', { activo: false }, true);
     }
   };
+
+  // ---------- suite de pruebas ----------
+
+  // Hace la petición sin tocar la sesión del usuario y además la deja en la consola
+  function req(metodo, ruta, cuerpo, tok) {
+    var url = base() + ruta;
+    var headers = {};
+    if (cuerpo) headers['Content-Type'] = 'application/json';
+    if (tok) headers['Authorization'] = 'Bearer ' + tok;
+
+    var opciones = { method: metodo, headers: headers };
+    if (cuerpo) opciones.body = JSON.stringify(cuerpo);
+
+    var t0 = performance.now();
+    var visibles = {};
+    for (var k in headers) {
+      visibles[k] = (k === 'Authorization') ? 'Bearer ' + headers[k].slice(7, 27) + '…' : headers[k];
+    }
+
+    return fetch(url, opciones).then(function (res) {
+      return res.text().then(function (txt) {
+        var datos;
+        try { datos = JSON.parse(txt); } catch (e) { datos = txt || '(sin contenido)'; }
+        log({
+          method: metodo, url: url, shortUrl: ruta, headers: visibles, body: cuerpo,
+          status: res.status, ms: Math.round(performance.now() - t0), response: datos
+        });
+        return { status: res.status, datos: datos };
+      });
+    }).catch(function (err) {
+      log({
+        method: metodo, url: url, shortUrl: ruta, headers: visibles, body: cuerpo,
+        status: 0, ms: Math.round(performance.now() - t0),
+        response: { error: 'No se pudo conectar', detalle: String(err.message || err) }
+      });
+      return { status: 0, datos: null };
+    });
+  }
+
+  var ctx = {};
+
+  // Cada caso: [grupo, nombre, requisito, función que devuelve la promesa, código esperado]
+  function construirCasos() {
+    var sello = Date.now().toString().slice(-6);
+    var reporteBase = {
+      idMunicipio: 1,
+      idCatalogoActividad: 1,
+      latitud: 19.5589,
+      longitud: -99.2641,
+      descripcion: 'Reporte generado por la suite automatica de pruebas.',
+      num_menores: 2,
+      rango_edad: '6 a 11 anos',
+      genero_observado: 'Ambos',
+      calle: 'Avenida Ruiz Cortines',
+      colonia: 'Lomas de Atizapan',
+      acepto_aviso: true
+    };
+
+    function con(extra) {
+      var o = {};
+      for (var k in reporteBase) o[k] = reporteBase[k];
+      for (var j in extra) o[j] = extra[j];
+      return o;
+    }
+
+    return [
+      ['Servicio', 'La función responde', 'RNF', function () {
+        return req('GET', '/health');
+      }, 200],
+
+      ['Catálogos', 'Lista de actividades', 'RF-01', function () {
+        return req('GET', '/api/v1/catalogos/actividades');
+      }, 200],
+
+      ['Catálogos', 'Lista de municipios adheridos', 'RF-27', function () {
+        return req('GET', '/api/v1/municipios');
+      }, 200],
+
+      ['Reporte ciudadano', 'Alta con seguimiento y correo', 'RF-01', function () {
+        return req('POST', '/api/v1/reportes', con({
+          modalidad: 'SEGUIMIENTO', correo_contacto: 'suite' + sello + '@correo.com'
+        })).then(function (r) {
+          if (r.datos && r.datos.folio) { ctx.folio = r.datos.folio; syncFolio(r.datos.folio); }
+          return r;
+        });
+      }, 201],
+
+      ['Reporte ciudadano', 'Alta anónima sin correo', 'RF-03', function () {
+        return req('POST', '/api/v1/reportes', con({ modalidad: 'ANONIMO' }));
+      }, 201],
+
+      ['Reporte ciudadano', 'Seguimiento sin correo se rechaza', 'RF-03', function () {
+        return req('POST', '/api/v1/reportes', con({ modalidad: 'SEGUIMIENTO' }));
+      }, 400],
+
+      ['Reporte ciudadano', 'Modalidad inventada se rechaza', 'RF-03', function () {
+        return req('POST', '/api/v1/reportes', con({ modalidad: 'LOQUESEA' }));
+      }, 400],
+
+      ['Reporte ciudadano', 'Sin aceptar aviso se rechaza', 'RNF-21', function () {
+        return req('POST', '/api/v1/reportes', con({
+          modalidad: 'ANONIMO', acepto_aviso: false
+        }));
+      }, 400],
+
+      ['Reporte ciudadano', 'Sin ubicación se rechaza', 'RF-04', function () {
+        return req('POST', '/api/v1/reportes', con({
+          modalidad: 'ANONIMO', latitud: null, longitud: null
+        }));
+      }, 400],
+
+      ['Reporte ciudadano', 'Municipio inexistente', 'RF-04', function () {
+        return req('POST', '/api/v1/reportes', con({ modalidad: 'ANONIMO', idMunicipio: 9999 }));
+      }, 404],
+
+      ['Consulta ciudadana', 'Consultar el folio recién creado', 'RF-07', function () {
+        return req('GET', '/api/v1/reportes/' + encodeURIComponent(ctx.folio || 'X'));
+      }, 200],
+
+      ['Consulta ciudadana', 'Folio inexistente', 'RF-07', function () {
+        return req('GET', '/api/v1/reportes/RIETI-XXX-2026-99999');
+      }, 404],
+
+      ['Seguridad', 'Bandeja sin token se bloquea', 'RF-11', function () {
+        return req('GET', '/api/v1/admin/reportes');
+      }, 401],
+
+      ['Seguridad', 'Token inválido se bloquea', 'RF-11', function () {
+        return req('GET', '/api/v1/admin/reportes', null, 'eyJhbGciOiJIUzI1NiJ9.falso.falso');
+      }, 403],
+
+      ['Sesión', 'Login del Administrador', 'RF-11', function () {
+        return req('POST', '/api/v1/auth/login', {
+          correo_institucional: 'admin.sipinna@edomex.gob.mx', password: 'Rieti2026'
+        }).then(function (r) {
+          if (r.datos && r.datos.token) ctx.tokenAdmin = r.datos.token;
+          return r;
+        });
+      }, 200],
+
+      ['Sesión', 'Contraseña incorrecta', 'RNF-31', function () {
+        return req('POST', '/api/v1/auth/login', {
+          correo_institucional: 'admin.sipinna@edomex.gob.mx', password: 'equivocada'
+        });
+      }, 401],
+
+      ['Sesión', 'Datos del usuario autenticado', 'RF-11', function () {
+        return req('GET', '/api/v1/auth/me', null, ctx.tokenAdmin);
+      }, 200],
+
+      ['Panel', 'Bandeja de reportes', 'RF-13', function () {
+        return req('GET', '/api/v1/admin/reportes', null, ctx.tokenAdmin);
+      }, 200],
+
+      ['Panel', 'Bandeja filtrada por estatus', 'RF-14', function () {
+        return req('GET', '/api/v1/admin/reportes?estatus=Recibido', null, ctx.tokenAdmin);
+      }, 200],
+
+      ['Panel', 'Expediente completo', 'RF-15', function () {
+        return req('GET', '/api/v1/admin/reportes/' + encodeURIComponent(ctx.folio || 'X') + '/expediente', null, ctx.tokenAdmin);
+      }, 200],
+
+      ['Dashboard', 'Resumen por estatus', 'RF-23', function () {
+        return req('GET', '/api/v1/admin/dashboard/resumen', null, ctx.tokenAdmin);
+      }, 200],
+
+      ['Dashboard', 'Estadísticas agrupadas', 'RF-24', function () {
+        return req('GET', '/api/v1/admin/dashboard/estadisticas?dias=30', null, ctx.tokenAdmin);
+      }, 200],
+
+      ['Usuarios', 'Alta de funcionario', 'RF-20', function () {
+        return req('POST', '/api/v1/admin/usuarios', {
+          nombre: 'Funcionario Suite ' + sello,
+          correo_institucional: 'suite' + sello + '@edomex.gob.mx',
+          telefono: '5500000000',
+          password: 'ClaveSuite2026',
+          idRol: 2,
+          idMunicipio: 1
+        }, ctx.tokenAdmin).then(function (r) {
+          if (r.datos && r.datos.idUsuario) ctx.idUsuario = r.datos.idUsuario;
+          return r;
+        });
+      }, 201],
+
+      ['Usuarios', 'Correo repetido se rechaza', 'RF-20', function () {
+        return req('POST', '/api/v1/admin/usuarios', {
+          nombre: 'Repetido',
+          correo_institucional: 'suite' + sello + '@edomex.gob.mx',
+          password: 'ClaveSuite2026', idRol: 2, idMunicipio: 1
+        }, ctx.tokenAdmin);
+      }, 409],
+
+      ['Usuarios', 'Contraseña corta se rechaza', 'RNF-31', function () {
+        return req('POST', '/api/v1/admin/usuarios', {
+          nombre: 'Corta', correo_institucional: 'corta' + sello + '@edomex.gob.mx',
+          password: '123', idRol: 2, idMunicipio: 1
+        }, ctx.tokenAdmin);
+      }, 400],
+
+      ['Usuarios', 'Listado con filtro por municipio', 'RF-20', function () {
+        return req('GET', '/api/v1/admin/usuarios?idMunicipio=1', null, ctx.tokenAdmin);
+      }, 200],
+
+      ['Usuarios', 'El hash nunca viaja en la respuesta', 'RNF-31', function () {
+        return req('GET', '/api/v1/admin/usuarios', null, ctx.tokenAdmin).then(function (r) {
+          if (r.status !== 200) return r;
+          var txt = JSON.stringify(r.datos || {});
+          return { status: txt.indexOf('password_hash') === -1 ? 200 : 500, datos: r.datos };
+        });
+      }, 200],
+
+      ['Usuarios', 'Editar datos del funcionario', 'RF-20', function () {
+        return req('PATCH', '/api/v1/admin/usuarios/' + ctx.idUsuario, {
+          nombre: 'Funcionario Suite Editado', telefono: '5511111111'
+        }, ctx.tokenAdmin);
+      }, 200],
+
+      ['Usuarios', 'Editar sin mandar campos', 'RF-20', function () {
+        return req('PATCH', '/api/v1/admin/usuarios/' + ctx.idUsuario, {}, ctx.tokenAdmin);
+      }, 400],
+
+      ['Usuarios', 'Editar usuario inexistente', 'RF-20', function () {
+        return req('PATCH', '/api/v1/admin/usuarios/999999', { nombre: 'X' }, ctx.tokenAdmin);
+      }, 404],
+
+      ['Asignación', 'Asignar el reporte al funcionario', 'RF-16', function () {
+        return req('POST', '/api/v1/admin/asignaciones', {
+          folio: ctx.folio, idUsuario: ctx.idUsuario
+        }, ctx.tokenAdmin);
+      }, 201],
+
+      ['Asignación', 'Reasignar el mismo folio se rechaza', 'RF-16', function () {
+        return req('POST', '/api/v1/admin/asignaciones', {
+          folio: ctx.folio, idUsuario: ctx.idUsuario
+        }, ctx.tokenAdmin);
+      }, 409],
+
+      ['Asignación', 'Funcionario de otro municipio', 'RF-12', function () {
+        return req('POST', '/api/v1/admin/asignaciones', {
+          folio: ctx.folio, idUsuario: 2
+        }, ctx.tokenAdmin);
+      }, 400],
+
+      ['Atención', 'Registrar actuación y cambiar estatus', 'RF-17', function () {
+        return req('POST', '/api/v1/admin/atencion', {
+          folio: ctx.folio, accion: 'Valoracion inicial',
+          nota_interna: 'Caso revisado por la suite de pruebas.',
+          nuevo_estatus: 'En Revision',
+          justificacion: 'Se asigna a procurador municipal para valoracion.'
+        }, ctx.tokenAdmin);
+      }, 200],
+
+      ['Atención', 'Cambio de estatus sin justificación', 'RF-18', function () {
+        return req('POST', '/api/v1/admin/atencion', {
+          folio: ctx.folio, accion: 'Prueba', nuevo_estatus: 'Concluido'
+        }, ctx.tokenAdmin);
+      }, 400],
+
+      ['Atención', 'Estatus fuera del catálogo', 'RF-17', function () {
+        return req('POST', '/api/v1/admin/atencion', {
+          folio: ctx.folio, accion: 'Prueba', nuevo_estatus: 'Descartado',
+          justificacion: 'prueba'
+        }, ctx.tokenAdmin);
+      }, 400],
+
+      ['Evidencias', 'URL firmada para subir foto', 'RF-05', function () {
+        return req('POST', '/api/v1/evidencias/presigned-url', {
+          folio: ctx.folio, nombreArchivo: 'prueba.jpg', fileType: 'image/jpeg'
+        });
+      }, 200],
+
+      ['Evidencias', 'URL de lectura de evidencia inexistente', 'RNF-32', function () {
+        return req('POST', '/api/v1/evidencias/url-lectura', {
+          key: 'evidencias/no/existe.jpg'
+        }, ctx.tokenAdmin);
+      }, 404],
+
+      ['Jurisdicción', 'Login del Alimentador', 'RF-11', function () {
+        return req('POST', '/api/v1/auth/login', {
+          correo_institucional: 'procurador.tlalnepantla@edomex.gob.mx', password: 'Rieti2026'
+        }).then(function (r) {
+          if (r.datos && r.datos.token) ctx.tokenAlim = r.datos.token;
+          return r;
+        });
+      }, 200],
+
+      ['Jurisdicción', 'Alimentador no da de alta usuarios', 'RF-11', function () {
+        return req('POST', '/api/v1/admin/usuarios', {
+          nombre: 'X', correo_institucional: 'x' + sello + '@edomex.gob.mx',
+          password: 'ClaveSuite2026', idRol: 2, idMunicipio: 2
+        }, ctx.tokenAlim);
+      }, 403],
+
+      ['Jurisdicción', 'Alimentador no transfiere reportes', 'RF-21', function () {
+        return req('POST', '/api/v1/admin/transferencias', {
+          tipo: 'DESCARTE', folio: ctx.folio, motivo: 'Duplicado', justificacion: 'prueba'
+        }, ctx.tokenAlim);
+      }, 403],
+
+      ['Jurisdicción', 'Alimentador no abre expediente ajeno', 'RF-12', function () {
+        return req('GET', '/api/v1/admin/reportes/' + encodeURIComponent(ctx.folio || 'X') + '/expediente', null, ctx.tokenAlim);
+      }, 403],
+
+      ['Baja de cuenta', 'Desactivar al funcionario de prueba', 'RF-20', function () {
+        return req('PATCH', '/api/v1/admin/usuarios/' + ctx.idUsuario + '/estado', {
+          activo: false
+        }, ctx.tokenAdmin);
+      }, 200],
+
+      ['Baja de cuenta', 'Desactivar dos veces se rechaza', 'RF-20', function () {
+        return req('PATCH', '/api/v1/admin/usuarios/' + ctx.idUsuario + '/estado', {
+          activo: false
+        }, ctx.tokenAdmin);
+      }, 400],
+
+      ['Baja de cuenta', 'El admin no puede desactivarse solo', 'RF-20', function () {
+        return req('PATCH', '/api/v1/admin/usuarios/1/estado', { activo: false }, ctx.tokenAdmin);
+      }, 400],
+
+      ['Baja de cuenta', 'La cuenta dada de baja no entra', 'RF-11', function () {
+        return req('POST', '/api/v1/auth/login', {
+          correo_institucional: 'suite' + sello + '@edomex.gob.mx',
+          password: 'ClaveSuite2026'
+        });
+      }, 401],
+
+      ['Servicio', 'Ruta inexistente', 'RNF', function () {
+        return req('GET', '/api/v1/ruta/que/no/existe');
+      }, 404]
+    ];
+  }
+
+  function correrSuite() {
+    var casos = construirCasos();
+    var panel = document.getElementById('suite');
+    var cuerpo = document.getElementById('suiteBody');
+    var btn = document.getElementById('btnSuite');
+
+    ctx = {};
+    panel.style.display = '';
+    cuerpo.innerHTML = '';
+    document.getElementById('mOk').textContent = '0';
+    document.getElementById('mFail').textContent = '0';
+    document.getElementById('mEstado').textContent = 'corriendo…';
+    btn.disabled = true;
+
+    var ok = 0, fail = 0, grupoActual = '';
+    var filas = [];
+
+    casos.forEach(function (c, i) {
+      if (c[0] !== grupoActual) {
+        grupoActual = c[0];
+        var g = document.createElement('div');
+        g.className = 'grupo';
+        g.textContent = c[0];
+        cuerpo.appendChild(g);
+      }
+      var fila = document.createElement('div');
+      fila.className = 'caso run';
+      fila.innerHTML = '<span class="marca">·</span>' +
+                       '<span class="caso-nombre">' + esc(c[1]) + '</span>' +
+                       '<span class="caso-rf">' + esc(c[2]) + '</span>' +
+                       '<span class="caso-cods">espera ' + c[4] + '</span>';
+      cuerpo.appendChild(fila);
+      filas.push(fila);
+    });
+
+    return casos.reduce(function (cadena, c, i) {
+      return cadena.then(function () {
+        return c[3]().then(function (r) {
+          var paso = r.status === c[4];
+          var fila = filas[i];
+          fila.className = 'caso ' + (paso ? 'ok' : 'fail');
+          fila.querySelector('.marca').textContent = paso ? '\u2713' : '\u2715';
+          fila.querySelector('.caso-cods').textContent =
+            paso ? String(r.status) : (r.status || 'sin respuesta') + ' \u2260 ' + c[4];
+          if (paso) ok++; else fail++;
+          document.getElementById('mOk').textContent = ok;
+          document.getElementById('mFail').textContent = fail;
+        });
+      });
+    }, Promise.resolve()).then(function () {
+      btn.disabled = false;
+      document.getElementById('mEstado').textContent =
+        fail === 0 ? 'todo correcto' : fail + ' por revisar';
+      if (ctx.tokenAdmin) setToken(ctx.tokenAdmin, 'Administrador (suite)');
+    });
+  }
 
   // ---------- eventos ----------
 
@@ -1660,6 +2324,8 @@
     for (var i = 0; i < cards.length; i++) cards[i].classList.toggle('open', abrir);
     this.textContent = abrir ? 'Cerrar todo' : 'Abrir todo';
   });
+
+  document.getElementById('btnSuite').addEventListener('click', correrSuite);
 
   document.getElementById('btnTheme').addEventListener('click', function () {
     var actual = document.documentElement.getAttribute('data-theme');

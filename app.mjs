@@ -5,6 +5,8 @@
 
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import rateLimit from 'express-rate-limit';
 import mysql from 'mysql2/promise';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
@@ -14,8 +16,42 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const app = express();
 
-app.use(cors());
+// Detrás de la Function URL de Lambda la IP real del cliente llega en
+// X-Forwarded-For. Sin esto el rate limiter vería una sola IP interna.
+app.set('trust proxy', 1);
+
+// Orígenes que pueden llamar la API desde un navegador. Con cookies de sesión
+// (credentials: true) el navegador rechaza el origen '*', así que hay lista.
+//
+// Los puertos locales son los que usan las herramientas de desarrollo del
+// equipo: 5173 Vite, 3000 Next/CRA, 5500 Live Server de VS Code, 8080 otros.
+// Sirven para abrir el panel de pruebas y el front en la máquina de cada quien.
+const PUERTOS_LOCALES = [5173, 3000, 5500, 8080];
+
+const ORIGENES_LOCALES = PUERTOS_LOCALES.flatMap((p) => [
+  `http://localhost:${p}`,
+  `http://127.0.0.1:${p}`
+]);
+
+// CORS_EXTRA_ORIGINS permite agregar orígenes sin volver a desplegar.
+// Normalmente va vacía.
+const ORIGENES_PERMITIDOS = [
+  ...ORIGENES_LOCALES,
+  process.env.FRONTEND_WEB_URL,
+  ...(process.env.CORS_EXTRA_ORIGINS || '').split(',').map((o) => o.trim())
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Sin cabecera Origin: app móvil nativa, curl o Postman. CORS no aplica.
+    if (!origin) return callback(null, true);
+    callback(null, ORIGENES_PERMITIDOS.includes(origin));
+  },
+  credentials: true
+}));
+
 app.use(express.json());
+app.use(cookieParser());
 
 // Si la API se expone por API Gateway, el path llega con el stage y el recurso
 // al inicio (/default/rieti-backend/api/v1/...). Con Function URL y en local
@@ -34,7 +70,12 @@ app.use((req, res, next) => {
 // CONFIGURACIÓN
 // =========================================================================
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secreto_rieti_local';
+// Sin secreto la función no arranca, en lugar de firmar con una clave conocida.
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+  throw new Error('Falta la variable de entorno JWT_SECRET');
+}
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -59,6 +100,11 @@ const BCRYPT_ROUNDS = 10;
 // Longitud mínima de contraseña
 const MIN_PASSWORD = 8;
 
+// Longitud máxima de los campos de texto libre del reporte.
+// Debe coincidir con VARCHAR de la base (db/migrar_limites_campos.sql).
+const MAX_DESCRIPCION = 500;
+const MAX_REFERENCIAS = 100;
+
 // Estatus válidos del reporte. Deben coincidir con el catálogo del diseño.
 const ESTATUS = {
   RECIBIDO: 'Recibido',
@@ -70,23 +116,62 @@ const ESTATUS = {
   CANCELADO: 'Cancelado'
 };
 
+// Rate limiting del login (RNF-07): 10 intentos por IP cada 15 minutos.
+// El contador vive en la memoria de la instancia de Lambda, así que el límite
+// es por contenedor y no global. Es una primera barrera, no una garantía.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.LOGIN_RATE_LIMIT) || 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Demasiados intentos de inicio de sesión. Intente nuevamente más tarde.'
+  }
+});
+
 // =========================================================================
 // MIDDLEWARE DE AUTENTICACIÓN (JWT)
 // =========================================================================
 
-const verificarToken = (req, res, next) => {
+const verificarToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ')
+    ? authHeader.split(' ')[1]
+    : null;
+
+  // El panel web manda el token en cookie HttpOnly, la app móvil en cabecera.
+  // Las mismas rutas sirven a los dos clientes.
+  const token = (req.cookies && req.cookies.rieti_token) || bearerToken;
 
   if (!token) {
     return res.status(401).json({ error: 'Acceso denegado. Token no proporcionado.' });
   }
 
+  let decoded;
+
   try {
-    req.usuario = jwt.verify(token, JWT_SECRET);
-    next();
+    decoded = jwt.verify(token, JWT_SECRET);
   } catch (error) {
     return res.status(403).json({ error: 'Token inválido o expirado.' });
+  }
+
+  try {
+    // El token dura 8 horas, pero una cuenta desactivada tiene que dejar de
+    // entrar de inmediato, así que el estado se revisa en cada petición.
+    const [rows] = await pool.query(
+      'SELECT activo FROM usuario WHERE idUsuario = ?',
+      [decoded.idUsuario]
+    );
+
+    if (rows.length === 0 || !rows[0].activo) {
+      return res.status(403).json({ error: 'La cuenta está inactiva' });
+    }
+
+    req.usuario = decoded;
+    next();
+  } catch (error) {
+    return res.status(500).json({ error: 'Error al validar la sesión', detalle: error.message });
   }
 };
 
@@ -197,6 +282,20 @@ app.post('/api/v1/reportes', async (req, res) => {
 
     if (!descripcion) {
       return res.status(400).json({ error: 'La descripción de los hechos es obligatoria' });
+    }
+
+    if (descripcion.length > MAX_DESCRIPCION) {
+      return res.status(400).json({
+        error: 'La descripción no puede pasar de ' + MAX_DESCRIPCION + ' caracteres',
+        longitud_recibida: descripcion.length
+      });
+    }
+
+    if (referencias && referencias.length > MAX_REFERENCIAS) {
+      return res.status(400).json({
+        error: 'Las referencias no pueden pasar de ' + MAX_REFERENCIAS + ' caracteres',
+        longitud_recibida: referencias.length
+      });
     }
 
     if (acepto_aviso !== true) {
@@ -329,6 +428,16 @@ app.post('/api/v1/evidencias/presigned-url', async (req, res) => {
       return res.status(500).json({ error: 'Falta la variable de entorno S3_BUCKET_NAME' });
     }
 
+    // No se firma una URL de subida para un folio que no existe
+    const [repRows] = await pool.query(
+      'SELECT folio FROM reporte WHERE folio = ?',
+      [folio]
+    );
+
+    if (repRows.length === 0) {
+      return res.status(404).json({ error: 'El folio no existe' });
+    }
+
     const key = `evidencias/${folio}/${Date.now()}_${nombreArchivo}`;
 
     const command = new PutObjectCommand({
@@ -353,6 +462,36 @@ app.post('/api/v1/evidencias/confirmar', async (req, res) => {
 
     if (!folio || !key) {
       return res.status(400).json({ error: 'Se requiere folio y key' });
+    }
+
+    // La key la genera el servidor con el prefijo evidencias/{folio}/.
+    // Si no coincide, se está intentando colgar un archivo ajeno al folio.
+    const prefijoEsperado = `evidencias/${folio}/`;
+
+    if (!key.startsWith(prefijoEsperado)) {
+      return res.status(400).json({ error: 'La evidencia no corresponde al folio indicado' });
+    }
+
+    const [repRows] = await pool.query(
+      'SELECT folio FROM reporte WHERE folio = ?',
+      [folio]
+    );
+
+    if (repRows.length === 0) {
+      return res.status(404).json({ error: 'El folio no existe' });
+    }
+
+    // Una misma key no se registra dos veces
+    const [dup] = await pool.query(
+      'SELECT idEvidencia FROM evidencia WHERE ruta_s3 = ?',
+      [key]
+    );
+
+    if (dup.length > 0) {
+      return res.status(409).json({
+        error: 'Esa evidencia ya está registrada',
+        idEvidencia: dup[0].idEvidencia
+      });
     }
 
     const [result] = await pool.query(
@@ -427,7 +566,7 @@ app.post('/api/v1/evidencias/url-lectura', verificarToken, async (req, res) => {
 // 3. AUTENTICACIÓN
 // =========================================================================
 
-app.post('/api/v1/auth/login', async (req, res) => {
+app.post('/api/v1/auth/login', loginLimiter, async (req, res) => {
   try {
     const { correo_institucional, password } = req.body;
 
@@ -477,6 +616,15 @@ app.post('/api/v1/auth/login', async (req, res) => {
       { expiresIn: '8h' }
     );
 
+    // El panel web usa esta cookie; JavaScript del navegador no puede leerla
+    // porque es HttpOnly. El token sigue en el JSON para la app móvil.
+    res.cookie('rieti_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 8 * 60 * 60 * 1000
+    });
+
     res.json({
       message: 'Inicio de sesión exitoso',
       token,
@@ -494,6 +642,18 @@ app.post('/api/v1/auth/login', async (req, res) => {
 
 app.get('/api/v1/auth/me', verificarToken, (req, res) => {
   res.json({ usuario: req.usuario });
+});
+
+// Cierre de sesión del panel web. No pide token: si la cookie ya venció
+// igual hay que borrarla del navegador.
+app.post('/api/v1/auth/logout', (req, res) => {
+  res.clearCookie('rieti_token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax'
+  });
+
+  res.json({ message: 'Sesión cerrada correctamente' });
 });
 
 // Cambio de contraseña propia. Cualquier usuario con sesión puede hacerlo,
@@ -939,7 +1099,7 @@ app.post('/api/v1/admin/asignaciones', verificarToken, soloAdministrador, async 
 app.post('/api/v1/admin/atencion', verificarToken, async (req, res) => {
   let connection;
   try {
-    const { idUsuario } = req.usuario;
+    const { idUsuario, idRol, idMunicipio } = req.usuario;
     const { folio, accion, nota_interna, nuevo_estatus, justificacion } = req.body;
 
     if (!folio || !accion) {
@@ -961,20 +1121,31 @@ app.post('/api/v1/admin/atencion', verificarToken, async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
+    // El reporte se consulta antes de escribir nada, para comprobar que existe
+    // y que el funcionario tiene jurisdicción sobre él
+    const [repRows] = await connection.query(
+      'SELECT idMunicipio, estatus FROM reporte WHERE folio = ?',
+      [folio]
+    );
+
+    if (repRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'El folio no existe' });
+    }
+
+    // Un Alimentador solo puede atender reportes de su municipio
+    if (idRol !== 1 && repRows[0].idMunicipio !== idMunicipio) {
+      await connection.rollback();
+      return res.status(403).json({ error: 'No tiene jurisdicción sobre este reporte' });
+    }
+
     await connection.query(
       'INSERT INTO bitacora (folio, idUsuario, accion, nota_interna) VALUES (?, ?, ?, ?)',
       [folio, idUsuario, accion, nota_interna || '']
     );
 
     if (nuevo_estatus) {
-      const [currRep] = await connection.query('SELECT estatus FROM reporte WHERE folio = ?', [folio]);
-
-      if (currRep.length === 0) {
-        await connection.rollback();
-        return res.status(404).json({ error: 'El folio no existe' });
-      }
-
-      const estatusAnterior = currRep[0].estatus;
+      const estatusAnterior = repRows[0].estatus;
 
       await connection.query(
         'UPDATE reporte SET estatus = ?, fecha_ultima_atencion = CURRENT_TIMESTAMP WHERE folio = ?',
