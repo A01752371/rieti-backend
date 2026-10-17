@@ -672,7 +672,8 @@ app.post('/api/v1/evidencias/confirmar', async (req, res) => {
 // Requiere sesión: las fotos son parte del expediente, no contenido público.
 /**
  * Genera una URL temporal de lectura para una evidencia privada almacenada en S3.
- * Verifica que la evidencia exista y que el usuario tenga jurisdicción para verla.
+ * Verifica que la evidencia exista, que el usuario tenga jurisdicción para verla
+ * y que el archivo no haya sido purgado de S3 (RNF-32).
  *
  * @route POST /api/v1/evidencias/url-lectura
  * @returns {Promise<void>}
@@ -705,9 +706,18 @@ app.post('/api/v1/evidencias/url-lectura', verificarToken, async (req, res) => {
 
     const evidencia = rows[0];
 
-    // Un Alimentador solo ve evidencias de su propio municipio
+    // Un Alimentador solo ve evidencias de su propio municipio.
+    // Va antes que la revisión de purga: primero se decide si la persona tiene
+    // derecho a preguntar, y hasta entonces se le dice en qué estado está.
     if (idRol !== 1 && evidencia.idMunicipio !== idMunicipio) {
       return res.status(403).json({ error: 'No tiene jurisdicción sobre esta evidencia' });
+    }
+
+    // El archivo se borra de S3 a los 10 días con una regla de ciclo de vida
+    // del bucket (RNF-32). El renglón se conserva como historial, pero ya no
+    // hay nada que firmar.
+    if (evidencia.fecha_purga && new Date(evidencia.fecha_purga) <= new Date()) {
+      return res.status(410).json({ error: 'La evidencia ya fue purgada' });
     }
 
     const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key });
@@ -1428,6 +1438,8 @@ app.post('/api/v1/admin/atencion', verificarToken, async (req, res) => {
 /**
  * Procesa transferencias intermunicipales, canalizaciones a PPNNA
  * y descartes administrativos.
+ * En una transferencia de municipio se libera la asignación anterior, porque
+ * el funcionario que la tenía deja de tener jurisdicción sobre el reporte.
  *
  * @route POST /api/v1/admin/transferencias
  * @returns {Promise<void>}
@@ -1484,6 +1496,15 @@ app.post('/api/v1/admin/transferencias', verificarToken, soloAdministrador, asyn
         `INSERT INTO transferencia (folio, idMunicipioOrigen, idMunicipioDestino, idUsuario, justificacion)
          VALUES (?, ?, ?, ?, ?)`,
         [folio, idOrigen, idMunicipioDestino, idUsuario, justificacion]
+      );
+
+      // El reporte cambia de municipio, así que el funcionario que lo tenía
+      // asignado ya no tiene jurisdicción sobre él. Sin esto el folio queda
+      // asignado a alguien del municipio anterior y, como asignacion.folio es
+      // UNIQUE, una nueva asignación respondería 409.
+      await connection.query(
+        'DELETE FROM asignacion WHERE folio = ?',
+        [folio]
       );
 
       await connection.query(
